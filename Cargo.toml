@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "ptx_intrinsics",
+    "cuda_driver",
+    "cuda_builder"
+]
+

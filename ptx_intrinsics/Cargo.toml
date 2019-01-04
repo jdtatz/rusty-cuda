@@ -1,0 +1,7 @@
+[package]
+name = "ptx-intrinsics"
+version = "0.1.0"
+authors = ["Julia Tatz <tatz.j@husky.neu.edu>"]
+description = "Intrinsics for ptx isa"
+edition = '2018'
+

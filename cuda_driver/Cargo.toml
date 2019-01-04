@@ -1,0 +1,10 @@
+[package]
+name = "cuda-driver"
+version = "0.1.0"
+authors = ["Julia Tatz <tatz.j@husky.neu.edu>"]
+description = "Dynamic bindings for cuda driver"
+edition = '2018'
+
+[dependencies]
+dlopen_derive = "0.1"
+dlopen = "0.1"
