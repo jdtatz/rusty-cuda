@@ -58,7 +58,7 @@ impl CUresult {
 }
 
 type CUdevice = c_int;
-type CUdeviceptr = c_uint;
+type CUdeviceptr = usize;
 type CUcontext = *const c_void;
 type CUmodule = *const c_void;
 type CUfunction = *const c_void;
@@ -76,26 +76,28 @@ struct CudaDriverDyLib {
     cuDeviceGetName: unsafe extern "C" fn(name: *mut c_char, len: c_int, dev: CUdevice) -> CUresult,
     cuDeviceGetAttribute: unsafe extern "C" fn(pi: *mut c_int, attrib: c_int, dev: CUdevice) -> CUresult,
 
-    cuCtxCreate: unsafe extern "C" fn(pctx: *mut CUcontext, flags: c_uint, dev: CUdevice) -> CUresult,
+    cuCtxCreate_v2: unsafe extern "C" fn(pctx: *mut CUcontext, flags: c_uint, dev: CUdevice) -> CUresult,
     cuCtxGetCurrent: unsafe extern "C" fn(pctx: *mut CUcontext) -> CUresult,
     cuCtxSetCurrent: unsafe extern "C" fn(ctx: CUcontext) -> CUresult,
-    cuCtxDestroy: unsafe extern "C" fn(ctx: CUcontext) -> CUresult,
+    cuCtxDestroy_v2: unsafe extern "C" fn(ctx: CUcontext) -> CUresult,
 
     cuModuleLoadData: unsafe extern "C" fn(module: *mut CUmodule, image: *const c_void) -> CUresult,
     cuModuleGetFunction: unsafe extern "C" fn(hfunc: *mut CUfunction, module: CUmodule, name: *const c_char) -> CUresult,
-    cuModuleGetGlobal: unsafe extern "C" fn(dptr: *mut CUdeviceptr, size: *mut usize, module: CUmodule, name: *const c_char) -> CUresult,
+    cuModuleGetGlobal_v2: unsafe extern "C" fn(dptr: *mut CUdeviceptr, size: *mut usize, module: CUmodule, name: *const c_char) -> CUresult,
     cuModuleUnload: unsafe extern "C" fn(module: CUmodule) -> CUresult,
 
-    cuMemAlloc: unsafe extern "C" fn(dptr: *mut CUdeviceptr, bytesize: usize) -> CUresult,
-    cuMemAllocHost: unsafe extern "C" fn(pp: *mut *const c_void, bytesize: usize) -> CUresult,
-    cuMemcpyHtoDAsync: unsafe extern "C" fn(dst: CUdeviceptr, src: *const c_void, bytesize: usize, stream: CUstream) -> CUresult,
-    cuMemcpyDtoHAsync: unsafe extern "C" fn(dst: *const c_void, src: CUdeviceptr, bytesize: usize, stream: CUstream) -> CUresult,
-    cuMemFree: unsafe extern "C" fn(dptr: CUdeviceptr) -> CUresult,
+    cuMemAlloc_v2: unsafe extern "C" fn(dptr: *mut CUdeviceptr, bytesize: usize) -> CUresult,
+    cuMemAllocHost_v2: unsafe extern "C" fn(pp: *mut *const c_void, bytesize: usize) -> CUresult,
+    cuMemcpyHtoDAsync_v2: unsafe extern "C" fn(dst: CUdeviceptr, src: *const c_void, bytesize: usize, stream: CUstream) -> CUresult,
+    cuMemcpyHtoD_v2: unsafe extern "C" fn(dst: CUdeviceptr, src: *const c_void, bytesize: usize) -> CUresult,
+    cuMemcpyDtoHAsync_v2: unsafe extern "C" fn(dst: *const c_void, src: CUdeviceptr, bytesize: usize, stream: CUstream) -> CUresult,
+    cuMemcpyDtoH_v2: unsafe extern "C" fn(dst: *const c_void, src: CUdeviceptr, bytesize: usize) -> CUresult,
+    cuMemFree_v2: unsafe extern "C" fn(dptr: CUdeviceptr) -> CUresult,
     cuMemFreeHost: unsafe extern "C" fn(dptr: *const c_void) -> CUresult,
 
     cuStreamCreate: unsafe extern "C" fn(pStream: *mut CUstream, flags: c_uint) -> CUresult,
     cuStreamSynchronize: unsafe extern "C" fn(stream: CUstream) -> CUresult,
-    cuStreamDestroy: unsafe extern "C" fn(stream: CUstream) -> CUresult,
+    cuStreamDestroy_v2: unsafe extern "C" fn(stream: CUstream) -> CUresult,
 
     cuLaunchKernel: unsafe extern "C" fn(f: CUfunction, gridDimX: c_uint, gridDimY: c_uint, gridDimZ: c_uint, blockDimX: c_uint, blockDimY: c_uint, blockDimZ: c_uint, sharedMemBytes: c_uint, stream: CUstream, params: *mut *mut c_void, extra: *mut *mut c_void) -> CUresult,
 }
@@ -139,10 +141,6 @@ impl CudaDriver {
             Ok(Some(CudaContext { context, driver: &self.lib }))
         }
     }
-
-    pub fn default_stream(&self) -> CudaStream {
-        CudaStream { stream: ptr::null_mut(), _context: PhantomData, driver: &self.lib }
-    }
 }
 
 
@@ -167,7 +165,7 @@ impl<'lib> CudaDevice<'lib> {
 
     pub fn create_context(&self, flags: u32) -> Result<CudaContext> {
         let mut context = unsafe { core::mem::uninitialized() };
-        unsafe { self.driver.cuCtxCreate(&mut context, flags, self.device) }.into_result(self.driver)?;
+        unsafe { self.driver.cuCtxCreate_v2(&mut context, flags, self.device) }.into_result(self.driver)?;
         Ok(CudaContext { context, driver: self.driver })
     }
 }
@@ -190,7 +188,7 @@ impl<'lib> CudaContext<'lib> {
 
     pub fn alloc(&self, bytesize: usize) -> Result<CudaDevicePtr> {
         let mut ptr = unsafe { core::mem::uninitialized() };
-        unsafe { self.driver.cuMemAlloc(&mut ptr, bytesize) }.into_result(self.driver)?;
+        unsafe { self.driver.cuMemAlloc_v2(&mut ptr, bytesize) }.into_result(self.driver)?;
         Ok(CudaDevicePtr { ptr, bytesize, _context: PhantomData, driver: self.driver })
     }
 
@@ -203,7 +201,7 @@ impl<'lib> CudaContext<'lib> {
 
 impl<'lib> Drop for CudaContext<'lib> {
     fn drop(&mut self) {
-        unsafe { self.driver.cuCtxDestroy(self.context) };
+        unsafe { self.driver.cuCtxDestroy_v2(self.context) };
     }
 }
 
@@ -223,7 +221,7 @@ impl<'ctx, 'lib: 'ctx> CudaModule<'ctx, 'lib> {
     pub fn get_global(&self, global_name: &CStr) -> Result<CudaDevicePtr> {
         let mut ptr = unsafe { core::mem::uninitialized() };
         let mut bytesize = unsafe { core::mem::uninitialized() };
-        unsafe { self.driver.cuModuleGetGlobal(&mut ptr, &mut bytesize, self.module, global_name.as_ptr()) }.into_result(self.driver)?;
+        unsafe { self.driver.cuModuleGetGlobal_v2(&mut ptr, &mut bytesize, self.module, global_name.as_ptr()) }.into_result(self.driver)?;
         Ok(CudaDevicePtr { ptr, bytesize, _context: PhantomData, driver: self.driver })
     }
 }
@@ -246,7 +244,7 @@ impl<'ctx, 'lib: 'ctx> CudaDevicePtr<'ctx, 'lib> {
         if bytesize > self.bytesize {
             panic!("Programmer Error: trying to transfer more memory than was allocated")
         } else {
-            unsafe { self.driver.cuMemcpyHtoDAsync(self.ptr, src as *const c_void, bytesize, stream.stream) }.into_result(&self.driver)
+            unsafe { self.driver.cuMemcpyHtoDAsync_v2(self.ptr, src as *const c_void, bytesize, stream.stream) }.into_result(&self.driver)
         }
     }
 
@@ -254,7 +252,7 @@ impl<'ctx, 'lib: 'ctx> CudaDevicePtr<'ctx, 'lib> {
         if bytesize > self.bytesize {
             panic!("Programmer Error: trying to transfer more memory than was allocated")
         } else {
-            unsafe { self.driver.cuMemcpyDtoHAsync(dst as *mut c_void, self.ptr, bytesize, stream.stream) }.into_result(&self.driver)
+            unsafe { self.driver.cuMemcpyDtoHAsync_v2(dst as *mut c_void, self.ptr, bytesize, stream.stream) }.into_result(&self.driver)
         }
     }
 
@@ -266,7 +264,7 @@ impl<'ctx, 'lib: 'ctx> CudaDevicePtr<'ctx, 'lib> {
 
 impl<'ctx, 'lib: 'ctx> Drop for CudaDevicePtr<'ctx, 'lib> {
     fn drop(&mut self) {
-        unsafe { self.driver.cuMemFree(self.ptr) };
+        unsafe { self.driver.cuMemFree_v2(self.ptr) };
     }
 }
 
@@ -285,7 +283,7 @@ impl<'ctx, 'lib: 'ctx>  CudaStream<'ctx, 'lib>  {
 impl<'ctx, 'lib: 'ctx>  Drop for CudaStream<'ctx, 'lib>  {
     fn drop(&mut self) {
         if !self.stream.is_null() {
-            unsafe { self.driver.cuStreamDestroy(self.stream) };
+            unsafe { self.driver.cuStreamDestroy_v2(self.stream) };
         }
     }
 }
