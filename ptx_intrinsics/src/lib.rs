@@ -1,6 +1,9 @@
 #![no_std]
-#![feature(asm, link_llvm_intrinsics, const_int_ops)]
+#![feature(core_intrinsics, asm, link_llvm_intrinsics, const_int_ops, alloc, alloc_error_handler, panic_info_message)]
 #![allow(non_camel_case_types)]
+#[macro_use]
+extern crate alloc;
+use alloc::prelude::*;
 
 extern {
     #[link_name = "llvm.nvvm.read.ptx.sreg.tid.x"]
@@ -50,6 +53,8 @@ extern {
     #[link_name = "llvm.nvvm.barrier0.popc"]
     fn __syncthreads_count(test: i32) -> i32;
 
+    #[link_name = "vprintf"]
+    pub fn vprintf(format: *const u8, valist: *const u8) -> i32;
     #[link_name = "malloc"]
     pub fn malloc(size: i64) -> *mut u8;
     #[link_name = "free"]
@@ -58,15 +63,70 @@ extern {
     pub fn __assertfail(message: *const u8, file: *const u8, line: u32, function: *const u8, char_size: usize);
 }
 
-pub fn dynamic_shared_mem<T: Copy + Sized>(len: usize) -> &'static mut [T] {
+pub struct CudaSysAllocator;
+unsafe impl core::alloc::GlobalAlloc for CudaSysAllocator {
+    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
+        malloc(layout.size() as i64)
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: core::alloc::Layout) {
+        free(ptr)
+    }
+}
+
+#[global_allocator]
+static GLOBAL_ALLOC: CudaSysAllocator = CudaSysAllocator;
+
+#[alloc_error_handler]
+unsafe fn cuda_sys_alloc_err(_: core::alloc::Layout) -> ! {
+    panic!("Alloc Error")
+}
+
+pub fn cuda_assert(msg: &str, file: &str, line: u32, function: &str) {
+    unsafe {
+        __assertfail(msg.as_ptr(), file.as_ptr(), line, function.as_ptr(), 1)
+    }
+}
+
+#[panic_handler]
+unsafe fn cuda_panic_handler(panic_info: &core::panic::PanicInfo) -> ! {
+    let (file, line) = panic_info.location().map_or(("", 0), |l| (l.file(), l.line()));
+    let func = "Unknown Function";
+    if let Some(msg) = panic_info.payload().downcast_ref::<&str>() {
+        cuda_assert(msg, file, line, func);
+    } else if let Some(args) = panic_info.message() {
+        let mut output = String::new();
+        let msg = core::fmt::write(&mut output, *args).ok().map_or("Error occurred while trying to write in String", |_| &output);
+        cuda_assert(&msg, file, line, func);
+    } else {
+        let msg = "panic occurred";
+        cuda_assert(msg, file, line, func);
+    }
+    core::intrinsics::breakpoint();
+    core::hint::unreachable_unchecked();
+}
+
+pub fn dynamic_shared_slice<T: Copy + Sized>(len: usize, offset: usize) -> &'static mut [T] {
     unsafe {
         let mut max_size: u32;
-        let ptr: *mut T;
+        let ptr: *mut u8;
         asm!("cvta.shared.u64 $0, 0; mov.u32  $1, %dynamic_smem_size;" : "=l"(ptr),"=r"(max_size) );
-        if len * core::mem::size_of::<T>() > max_size as usize {
+        if len * core::mem::size_of::<T>() + offset > max_size as usize {
             panic!("Requested more dynamic memory than what was allocated at kernel launch!")
         }
-        core::slice::from_raw_parts_mut(ptr, len)
+        core::slice::from_raw_parts_mut(ptr.add(offset) as *mut T, len)
+    }
+}
+
+pub fn dynamic_shared_ref<T: Copy + Sized>(offset: usize) -> &'static mut T {
+    unsafe {
+        let mut max_size: u32;
+        let ptr: *mut u8;
+        asm!("cvta.shared.u64 $0, 0; mov.u32  $1, %dynamic_smem_size;" : "=l"(ptr),"=r"(max_size) );
+        if core::mem::size_of::<T>() + offset > max_size as usize {
+            panic!("Requested more dynamic memory than what was allocated at kernel launch!")
+        }
+        &mut * (ptr.add(offset) as *mut T)
     }
 }
 
@@ -134,21 +194,26 @@ pub fn tid() -> usize {
 pub fn syncthreads() {
     unsafe {
         asm!("" ::: "memory" : "volatile");
-        __syncthreads()
+        __syncthreads();
+        asm!("" ::: "memory" : "volatile");
     }
 }
 
 pub fn syncthreads_or(test: bool) -> bool {
     unsafe {
         asm!("" ::: "memory" : "volatile");
-        __syncthreads_or(if test { 1 } else { 0 }) != 0
+        let b = __syncthreads_or(if test { 1 } else { 0 }) != 0;
+        asm!("" ::: "memory" : "volatile");
+        b
     }
 }
 
 pub fn syncthreads_count(test: bool) -> usize {
     unsafe {
         asm!("" ::: "memory" : "volatile");
-        __syncthreads_or(if test { 1 } else { 0 }) as usize
+        let c = __syncthreads_or(if test { 1 } else { 0 }) as usize;
+        asm!("" ::: "memory" : "volatile");
+        c
     }
 }
 
@@ -203,12 +268,19 @@ pub fn reduce<N: Copy + Sized + 'static, F: Fn(N, N) -> N>(f: F, value: N, width
     const WARP_SIZE: usize = 32;
     const MASK: i32 = -1;
 
+    let tid = self::tid();
     let laneid = laneid();
     let mut val = value;
     if width <= WARP_SIZE && is_pow_2(width) {
         for i in 0..ilog2(width){
             val = f(val, shfl_bfly_sync(MASK, val, 1i32 << i));
         }
+        let shared = dynamic_shared_ref(0);
+        syncthreads();
+        if tid == 0 { *shared = val; }
+        syncthreads();
+        let val = *shared;
+        syncthreads();
         val
     } else if width <= WARP_SIZE {
         let closest_pow2 = 1 << ilog2(width);
@@ -220,12 +292,17 @@ pub fn reduce<N: Copy + Sized + 'static, F: Fn(N, N) -> N>(f: F, value: N, width
         for i in 0..ilog2(width){
             val = f(val, shfl_bfly_sync(MASK, val, 1i32 << i));
         }
-        shfl_sync(MASK, val, 0)
+        let shared = dynamic_shared_ref(0);
+        syncthreads();
+        if tid == 0 { *shared = val; }
+        syncthreads();
+        let val = *shared;
+        syncthreads();
+        val
     } else {
         let last_warp_size = width % WARP_SIZE;
         let warp_count = width / WARP_SIZE + (if last_warp_size > 0 { 1 } else { 0 });
-        let shared_buffer = dynamic_shared_mem(warp_count as usize);
-        let tid = self::tid();
+        let shared_buffer = dynamic_shared_slice(warp_count as usize, 0);
         syncthreads();
         if last_warp_size == 0 || tid < width - last_warp_size {
             for i in 0..ilog2(WARP_SIZE){
