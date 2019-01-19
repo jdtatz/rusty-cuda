@@ -1,6 +1,7 @@
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
+#![allow(clippy::too_many_arguments)]
 
 use std::ptr;
 use std::os::raw::{c_void, c_char, c_int, c_uint};
@@ -295,8 +296,11 @@ pub struct CudaFunction<'m, 'ctx: 'm, 'lib: 'ctx> {
 }
 
 impl<'m, 'ctx: 'm, 'lib: 'ctx>  CudaFunction<'m, 'ctx, 'lib>  {
-    pub fn launch(&self, gridDim: (u32, u32, u32), blockDim: (u32, u32, u32), dynamic_shared_mem_size: u32, stream: &CudaStream, args: *mut *mut c_void) -> Result<()> {
-        unsafe { self.driver.cuLaunchKernel(self.function, gridDim.0, gridDim.1, gridDim.2, blockDim.0, blockDim.1, blockDim.2, dynamic_shared_mem_size, stream.stream, args, ptr::null_mut()) }.into_result(&self.driver)
+    pub fn launch(&self, gridDim: (u32, u32, u32), blockDim: (u32, u32, u32), dynamic_shared_mem_size: u32, stream: &CudaStream, args: &mut [&mut CudaDevicePtr]) -> Result<()> {
+        let mut args = args.iter_mut().map(|ptr| ptr.as_mut_ptr()).collect::<Vec<_>>();
+        unsafe {
+            self.driver.cuLaunchKernel(self.function, gridDim.0, gridDim.1, gridDim.2, blockDim.0, blockDim.1, blockDim.2, dynamic_shared_mem_size, stream.stream, args.as_mut_ptr(), ptr::null_mut())
+        }.into_result(&self.driver)
     }
 }
 

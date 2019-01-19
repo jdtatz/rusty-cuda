@@ -1,7 +1,6 @@
 #![no_std]
-#![feature(core_intrinsics, asm, link_llvm_intrinsics, const_int_ops, alloc, alloc_error_handler, panic_info_message)]
+#![feature(core_intrinsics, asm, link_llvm_intrinsics, alloc, alloc_error_handler, panic_info_message)]
 #![allow(non_camel_case_types)]
-#[macro_use]
 extern crate alloc;
 use alloc::prelude::*;
 
@@ -69,7 +68,7 @@ unsafe impl core::alloc::GlobalAlloc for CudaSysAllocator {
         malloc(layout.size() as i64)
     }
 
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: core::alloc::Layout) {
+    unsafe fn dealloc(&self, ptr: *mut u8, _layout: core::alloc::Layout) {
         free(ptr)
     }
 }
@@ -273,15 +272,15 @@ pub fn reduce<N: Copy + Sized + 'static, F: Fn(N, N) -> N>(f: F, value: N, width
     let mut val = value;
     if width <= WARP_SIZE && is_pow_2(width) {
         for i in 0..ilog2(width){
-            val = f(val, shfl_bfly_sync(MASK, val, 1i32 << i));
+            val = f(val, shfl_bfly_sync(MASK, val, 1_i32 << i));
         }
         let shared = dynamic_shared_ref(0);
         syncthreads();
         if tid == 0 { *shared = val; }
         syncthreads();
-        let val = *shared;
+        let value = *shared;
         syncthreads();
-        val
+        value
     } else if width <= WARP_SIZE {
         let closest_pow2 = 1 << ilog2(width);
         let diff = width - closest_pow2;
@@ -290,15 +289,15 @@ pub fn reduce<N: Copy + Sized + 'static, F: Fn(N, N) -> N>(f: F, value: N, width
             val = f(val, temp);
         }
         for i in 0..ilog2(width){
-            val = f(val, shfl_bfly_sync(MASK, val, 1i32 << i));
+            val = f(val, shfl_bfly_sync(MASK, val, 1_i32 << i));
         }
         let shared = dynamic_shared_ref(0);
         syncthreads();
         if tid == 0 { *shared = val; }
         syncthreads();
-        let val = *shared;
+        let value = *shared;
         syncthreads();
-        val
+        value
     } else {
         let last_warp_size = width % WARP_SIZE;
         let warp_count = width / WARP_SIZE + (if last_warp_size > 0 { 1 } else { 0 });
@@ -306,11 +305,11 @@ pub fn reduce<N: Copy + Sized + 'static, F: Fn(N, N) -> N>(f: F, value: N, width
         syncthreads();
         if last_warp_size == 0 || tid < width - last_warp_size {
             for i in 0..ilog2(WARP_SIZE){
-                val = f(val, shfl_bfly_sync(MASK, val, 1i32 << i))
+                val = f(val, shfl_bfly_sync(MASK, val, 1_i32 << i))
             }
         } else if is_pow_2(last_warp_size) {
             for i in 0..ilog2(last_warp_size){
-                val = f(val, shfl_bfly_sync(MASK, val, 1i32 << i))
+                val = f(val, shfl_bfly_sync(MASK, val, 1_i32 << i))
             }
         } else {
             let closest_lpow2 = 1 << ilog2(last_warp_size);
@@ -319,7 +318,7 @@ pub fn reduce<N: Copy + Sized + 'static, F: Fn(N, N) -> N>(f: F, value: N, width
                 val = f(val, temp);
             }
             for i in 0..ilog2(closest_lpow2){
-                val = f(val, shfl_bfly_sync(MASK, val, 1i32 << i));
+                val = f(val, shfl_bfly_sync(MASK, val, 1_i32 << i));
             }
         }
         if laneid == 0 && tid < width {
