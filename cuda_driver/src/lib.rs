@@ -7,64 +7,52 @@ use std::ptr;
 use std::os::raw::{c_void, c_char, c_int, c_uint};
 use std::ffi::{CStr, OsStr};
 use std::marker::PhantomData;
-#[macro_use]
-extern crate dlopen_derive;
+extern crate failure;
+#[macro_use] extern crate failure_derive;
+#[macro_use] extern crate derive_more;
+#[macro_use] extern crate dlopen_derive;
 use dlopen::wrapper::{Container, WrapperApi};
 use dlopen::utils::platform_file_name;
 
+include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
-#[derive(Debug)]
-pub struct CudaDriverError(String);
-
-impl std::fmt::Display for CudaDriverError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "CudaError: {}", self.0)
-    }
+#[derive(Fail, Debug, From)]
+pub enum Error{
+    #[fail(display = "CudaDriver Error: {}", _0)]
+    CudaError(String),
+    #[fail(display = "{}", _0)]
+    LibError(dlopen::Error)
 }
 
-impl std::error::Error for CudaDriverError { }
+pub type Result<T> = std::result::Result<T, Error>;
 
-
-pub type Result<T> = std::result::Result<T, CudaDriverError>;
-
-
-#[derive(Clone, Copy)]
-#[repr(transparent)]
-struct CUresult(c_int);
 
 impl CUresult {
     fn into_result(self, driver: &Container<CudaDriverDyLib>) -> Result<()> {
-        if self.0 == 0 {
-            Ok(())
-        } else {
-            let mut name_ptr: *const c_char = ptr::null();
-            let res = unsafe { driver.cuGetErrorName(self, &mut name_ptr) };
-            if res.0 != 0 {
-                return Err(CudaDriverError("Unknown CudaDriver Error".to_string()));
-            }
-            let mut descr_ptr: *const c_char = ptr::null();
-            let res = unsafe { driver.cuGetErrorString(self, &mut descr_ptr) };
-            if res.0 != 0 {
-                return Err(CudaDriverError("Unknown CudaDriver Error".to_string()));
-            }
-            let err_name = unsafe { CStr::from_ptr(name_ptr) };
-            let err_descr = unsafe { CStr::from_ptr(descr_ptr) };
-            let name = err_name.to_string_lossy();
-            let descr = err_descr.to_string_lossy();
+        match self {
+            cudaError_enum::CUDA_SUCCESS => Ok(()),
+            _ => {
+                let mut name_ptr: *const c_char = ptr::null();
+                let res = unsafe { driver.cuGetErrorName(self, &mut name_ptr) };
+                if res != cudaError_enum::CUDA_SUCCESS {
+                    return Err(Error::CudaError("Unknown CudaDriver Error".to_string()));
+                }
+                let mut descr_ptr: *const c_char = ptr::null();
+                let res = unsafe { driver.cuGetErrorString(self, &mut descr_ptr) };
+                if res != cudaError_enum::CUDA_SUCCESS {
+                    return Err(Error::CudaError("Unknown CudaDriver Error".to_string()));
+                }
+                let err_name = unsafe { CStr::from_ptr(name_ptr) };
+                let err_descr = unsafe { CStr::from_ptr(descr_ptr) };
+                let name = err_name.to_string_lossy();
+                let descr = err_descr.to_string_lossy();
 
-            let err = format!("{}: {}", name, descr);
-            Err(CudaDriverError(err))
+                let err = format!("{}: {}", name, descr);
+                Err(Error::CudaError(err))
+            }
         }
     }
 }
-
-type CUdevice = c_int;
-type CUdeviceptr = usize;
-type CUcontext = *const c_void;
-type CUmodule = *const c_void;
-type CUfunction = *const c_void;
-type CUstream = *const c_void;
-
 
 #[derive(WrapperApi)]
 struct CudaDriverDyLib {
@@ -75,14 +63,15 @@ struct CudaDriverDyLib {
     cuDeviceGet: unsafe extern "C" fn(device: *mut CUdevice, ordinal: c_int) -> CUresult,
     cuDeviceGetCount: unsafe extern "C" fn(count: *mut c_int) -> CUresult,
     cuDeviceGetName: unsafe extern "C" fn(name: *mut c_char, len: c_int, dev: CUdevice) -> CUresult,
-    cuDeviceGetAttribute: unsafe extern "C" fn(pi: *mut c_int, attrib: c_int, dev: CUdevice) -> CUresult,
+    cuDeviceGetAttribute: unsafe extern "C" fn(pi: *mut c_int, attrib: CUdevice_attribute, dev: CUdevice) -> CUresult,
 
-    cuCtxCreate_v2: unsafe extern "C" fn(pctx: *mut CUcontext, flags: c_uint, dev: CUdevice) -> CUresult,
+    cuCtxCreate_v2: unsafe extern "C" fn(pctx: *mut CUcontext, flag: CUctx_flags, dev: CUdevice) -> CUresult,
     cuCtxGetCurrent: unsafe extern "C" fn(pctx: *mut CUcontext) -> CUresult,
     cuCtxSetCurrent: unsafe extern "C" fn(ctx: CUcontext) -> CUresult,
     cuCtxDestroy_v2: unsafe extern "C" fn(ctx: CUcontext) -> CUresult,
 
     cuModuleLoadData: unsafe extern "C" fn(module: *mut CUmodule, image: *const c_void) -> CUresult,
+    cuModuleLoadDataEx: unsafe extern "C" fn(module: *mut CUmodule, image: *const c_void, numopt: c_uint, opts: *const CUjit_option_enum, opt_vals: *const *mut c_void) -> CUresult,
     cuModuleGetFunction: unsafe extern "C" fn(hfunc: *mut CUfunction, module: CUmodule, name: *const c_char) -> CUresult,
     cuModuleGetGlobal_v2: unsafe extern "C" fn(dptr: *mut CUdeviceptr, size: *mut usize, module: CUmodule, name: *const c_char) -> CUresult,
     cuModuleUnload: unsafe extern "C" fn(module: CUmodule) -> CUresult,
@@ -91,12 +80,12 @@ struct CudaDriverDyLib {
     cuMemAllocHost_v2: unsafe extern "C" fn(pp: *mut *const c_void, bytesize: usize) -> CUresult,
     cuMemcpyHtoDAsync_v2: unsafe extern "C" fn(dst: CUdeviceptr, src: *const c_void, bytesize: usize, stream: CUstream) -> CUresult,
     cuMemcpyHtoD_v2: unsafe extern "C" fn(dst: CUdeviceptr, src: *const c_void, bytesize: usize) -> CUresult,
-    cuMemcpyDtoHAsync_v2: unsafe extern "C" fn(dst: *const c_void, src: CUdeviceptr, bytesize: usize, stream: CUstream) -> CUresult,
-    cuMemcpyDtoH_v2: unsafe extern "C" fn(dst: *const c_void, src: CUdeviceptr, bytesize: usize) -> CUresult,
+    cuMemcpyDtoHAsync_v2: unsafe extern "C" fn(dst: *mut c_void, src: CUdeviceptr, bytesize: usize, stream: CUstream) -> CUresult,
+    cuMemcpyDtoH_v2: unsafe extern "C" fn(dst: *mut c_void, src: CUdeviceptr, bytesize: usize) -> CUresult,
     cuMemFree_v2: unsafe extern "C" fn(dptr: CUdeviceptr) -> CUresult,
     cuMemFreeHost: unsafe extern "C" fn(dptr: *const c_void) -> CUresult,
 
-    cuStreamCreate: unsafe extern "C" fn(pStream: *mut CUstream, flags: c_uint) -> CUresult,
+    cuStreamCreate: unsafe extern "C" fn(pStream: *mut CUstream, flags: CUstream_flags) -> CUresult,
     cuStreamSynchronize: unsafe extern "C" fn(stream: CUstream) -> CUresult,
     cuStreamDestroy_v2: unsafe extern "C" fn(stream: CUstream) -> CUresult,
 
@@ -108,7 +97,7 @@ pub struct CudaDriver {
 }
 
 impl CudaDriver {
-    pub fn init(libcuda_path: Option<&OsStr>) -> std::result::Result<CudaDriver, Box<dyn std::error::Error>> {
+    pub fn init(libcuda_path: Option<&OsStr>) -> Result<CudaDriver> {
         #[cfg(windows)]
         let default = platform_file_name("nvcuda");
         #[cfg(not(windows))]
@@ -158,15 +147,16 @@ impl<'lib> CudaDevice<'lib> {
         Ok(String::from_utf8_lossy(&buffer).to_string())
     }
 
-    pub fn get_attr(&self, attrib: i32) -> Result<i32> {
+    pub fn get_attr(&self, attrib: CUdevice_attribute_enum) -> Result<i32> {
         let mut val = unsafe { core::mem::uninitialized() };
         unsafe { self.driver.cuDeviceGetAttribute(&mut val, attrib, self.device) }.into_result(self.driver)?;
         Ok(val)
     }
 
-    pub fn create_context(&self, flags: u32) -> Result<CudaContext> {
+    pub fn create_context(&self, flag: Option<CUctx_flags_enum>) -> Result<CudaContext> {
+        let flag = flag.unwrap_or(CUctx_flags_enum::CU_CTX_SCHED_AUTO);
         let mut context = unsafe { core::mem::uninitialized() };
-        unsafe { self.driver.cuCtxCreate_v2(&mut context, flags, self.device) }.into_result(self.driver)?;
+        unsafe { self.driver.cuCtxCreate_v2(&mut context, flag, self.device) }.into_result(self.driver)?;
         Ok(CudaContext { context, driver: self.driver })
     }
 }
@@ -187,15 +177,23 @@ impl<'lib> CudaContext<'lib> {
         Ok(CudaModule { module, _context: PhantomData, driver: self.driver })
     }
 
+    pub fn create_module_opts(&self, ptx: &CStr, opt_names: &[CUjit_option_enum], opt_vals: &[*mut c_void]) -> Result<CudaModule> {
+        assert_eq!(opt_names.len(), opt_vals.len(), "The number of values must be equal to the number of names");
+        let mut module = unsafe { core::mem::uninitialized() };
+        unsafe { self.driver.cuModuleLoadDataEx(&mut module, ptx.as_ptr() as *const _, opt_names.len() as _, opt_names.as_ptr(), opt_vals.as_ptr()) }.into_result(self.driver)?;
+        Ok(CudaModule { module, _context: PhantomData, driver: self.driver })
+    }
+
     pub fn alloc(&self, bytesize: usize) -> Result<CudaDevicePtr> {
         let mut ptr = unsafe { core::mem::uninitialized() };
         unsafe { self.driver.cuMemAlloc_v2(&mut ptr, bytesize) }.into_result(self.driver)?;
         Ok(CudaDevicePtr { ptr, bytesize, _context: PhantomData, driver: self.driver })
     }
 
-    pub fn create_stream(&self, flags: u32) -> Result<CudaStream> {
+    pub fn create_stream(&self, flag: Option<CUstream_flags_enum>) -> Result<CudaStream> {
+        let flag = flag.unwrap_or(CUstream_flags_enum::CU_STREAM_DEFAULT);
         let mut stream = unsafe { core::mem::uninitialized() };
-        unsafe { self.driver.cuStreamCreate(&mut stream, flags)}.into_result(self.driver)?;
+        unsafe { self.driver.cuStreamCreate(&mut stream, flag)}.into_result(self.driver)?;
         Ok(CudaStream { stream, _context: PhantomData, driver: self.driver })
     }
 }

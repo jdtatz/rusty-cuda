@@ -89,17 +89,19 @@ pub fn cuda_assert(msg: &str, file: &str, line: u32, function: &str) {
 
 #[panic_handler]
 unsafe fn cuda_panic_handler(panic_info: &core::panic::PanicInfo) -> ! {
-    let (file, line) = panic_info.location().map_or(("", 0), |l| (l.file(), l.line()));
-    let func = "Unknown Function";
-    if let Some(msg) = panic_info.payload().downcast_ref::<&str>() {
-        cuda_assert(msg, file, line, func);
-    } else if let Some(args) = panic_info.message() {
-        let mut output = String::new();
-        let msg = core::fmt::write(&mut output, *args).ok().map_or("Error occurred while trying to write in String", |_| &output);
-        cuda_assert(&msg, file, line, func);
-    } else {
-        let msg = "panic occurred";
-        cuda_assert(msg, file, line, func);
+    #[cfg(feature = "noisy-errors")] {
+        let (file, line) = panic_info.location().map_or(("", 0), |l| (l.file(), l.line()));
+        let func = "Unknown Function";
+        if let Some(msg) = panic_info.payload().downcast_ref::<&str>() {
+            cuda_assert(msg, file, line, func);
+        } else if let Some(args) = panic_info.message() {
+            let mut output = String::new();
+            let msg = core::fmt::write(&mut output, *args).ok().map_or("Error occurred while trying to write in String", |_| &output);
+            cuda_assert(&msg, file, line, func);
+        } else {
+            let msg = "panic occurred";
+            cuda_assert(msg, file, line, func);
+        }
     }
     core::intrinsics::breakpoint();
     core::hint::unreachable_unchecked();

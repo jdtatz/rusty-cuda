@@ -5,3 +5,6 @@ authors = ["Julia Tatz <tatz.j@husky.neu.edu>"]
 description = "Intrinsics for ptx isa"
 edition = '2018'
 
+[features]
+default = []
+noisy-errors = []

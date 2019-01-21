@@ -8,3 +8,9 @@ edition = '2018'
 [dependencies]
 dlopen_derive = "0.1"
 dlopen = "0.1"
+derive_more = "0.13"
+failure_derive = "0.1"
+failure = "0.1"
+
+[build-dependencies]
+bindgen = "0.47"
