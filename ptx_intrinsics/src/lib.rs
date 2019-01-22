@@ -2,7 +2,6 @@
 #![feature(core_intrinsics, asm, link_llvm_intrinsics, alloc, alloc_error_handler, panic_info_message)]
 #![allow(non_camel_case_types)]
 extern crate alloc;
-use alloc::prelude::*;
 
 extern {
     #[link_name = "llvm.nvvm.read.ptx.sreg.tid.x"]
@@ -90,6 +89,7 @@ pub fn cuda_assert(msg: &str, file: &str, line: u32, function: &str) {
 #[panic_handler]
 unsafe fn cuda_panic_handler(panic_info: &core::panic::PanicInfo) -> ! {
     #[cfg(feature = "noisy-errors")] {
+        use alloc::prelude::*;
         let (file, line) = panic_info.location().map_or(("", 0), |l| (l.file(), l.line()));
         let func = "Unknown Function";
         if let Some(msg) = panic_info.payload().downcast_ref::<&str>() {
