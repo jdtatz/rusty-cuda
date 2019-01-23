@@ -5,11 +5,14 @@ use std::path::PathBuf;
 fn main() {
     let cuda_path = env::var("CUDA_PATH").expect("Need path to cuda.h");
     let cuda_inc_path = PathBuf::from(cuda_path).join("include");
+    if env::var_os("CARGO_FEATURE_STATIC").is_some() {
+        println!("cargo:rustc-link-lib=static=cuda")
+    }
 
     let bindings = bindgen::Builder::default()
         .header("wrapper.h")
         .clang_args(&["-I", cuda_inc_path.to_str().unwrap()])
-        .default_enum_style(bindgen::EnumVariation::Rust)
+        .default_enum_style(bindgen::EnumVariation::Rust)/*
         .whitelist_var("CUDA_VERSION")
         .whitelist_type("CUresult")
         .whitelist_type("CUdevice")
@@ -21,7 +24,7 @@ fn main() {
         .whitelist_type("CUdevice_attribute")
         .whitelist_type("CUctx_flags")
         .whitelist_type("CUjit_option")
-        .whitelist_type("CUstream_flags")
+        .whitelist_type("CUstream_flags")*/
         .generate()
         .expect("Unable to generate bindings");
 
