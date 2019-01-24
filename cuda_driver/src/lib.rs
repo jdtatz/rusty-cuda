@@ -20,11 +20,14 @@ use failure::ResultExt;
 #[cfg(not(feature = "static"))]
 use dlopen::{utils::platform_file_name, wrapper::{Container, WrapperApi}};
 
-pub mod driver {
+#[cfg(feature = "nvrtc")]
+pub mod nvrtc;
+
+mod driver {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
-use driver::{CUresult, CUdevice, CUdeviceptr, CUcontext, CUstream, CUmodule, CUfunction};
+use driver::{CUresult, CUdevice, CUdeviceptr, CUcontext, CUstream, CUmodule, CUfunction, CUhostFn};
 pub use driver::{CUDA_VERSION, CUctx_flags, CUstream_flags, CUjit_option, CUdevice_attribute};
 
 #[derive(Fail, Debug, From)]
@@ -121,9 +124,7 @@ struct CudaDriverDyLib {
     cuMemAlloc_v2: unsafe extern "C" fn(dptr: *mut CUdeviceptr, bytesize: usize) -> CUresult,
     cuMemAllocHost_v2: unsafe extern "C" fn(pp: *mut *const c_void, bytesize: usize) -> CUresult,
     cuMemcpyHtoDAsync_v2: unsafe extern "C" fn(dst: CUdeviceptr, src: *const c_void, bytesize: usize, stream: CUstream) -> CUresult,
-    cuMemcpyHtoD_v2: unsafe extern "C" fn(dst: CUdeviceptr, src: *const c_void, bytesize: usize) -> CUresult,
     cuMemcpyDtoHAsync_v2: unsafe extern "C" fn(dst: *mut c_void, src: CUdeviceptr, bytesize: usize, stream: CUstream) -> CUresult,
-    cuMemcpyDtoH_v2: unsafe extern "C" fn(dst: *mut c_void, src: CUdeviceptr, bytesize: usize) -> CUresult,
     cuMemFree_v2: unsafe extern "C" fn(dptr: CUdeviceptr) -> CUresult,
     cuMemFreeHost: unsafe extern "C" fn(dptr: *const c_void) -> CUresult,
 
@@ -132,6 +133,7 @@ struct CudaDriverDyLib {
     cuStreamDestroy_v2: unsafe extern "C" fn(stream: CUstream) -> CUresult,
 
     cuLaunchKernel: unsafe extern "C" fn(f: CUfunction, gridDimX: c_uint, gridDimY: c_uint, gridDimZ: c_uint, blockDimX: c_uint, blockDimY: c_uint, blockDimZ: c_uint, sharedMemBytes: c_uint, stream: CUstream, params: *mut *mut c_void, extra: *mut *mut c_void) -> CUresult,
+    cuLaunchHostFunc: unsafe extern "C" fn(stream: CUstream, func: CUhostFn, user_data: *mut c_void) -> CUresult
 }
 
 pub struct CudaDriver;
@@ -300,7 +302,6 @@ impl<'ctx> CudaDevicePtr<'ctx> {
     }
 }
 
-
 impl<'ctx> Drop for CudaDevicePtr<'ctx> {
     fn drop(&mut self) {
         cuda!(@safe cuMemFree_v2(self.ptr)).unwrap()
@@ -316,6 +317,10 @@ pub struct CudaStream<'ctx> {
 impl<'ctx>  CudaStream<'ctx>  {
     pub fn synchronize(&self) -> Result<()> {
         cuda!(@safe cuStreamSynchronize(self.stream))
+    }
+
+    pub fn add_callback(&self, callback: unsafe extern "C" fn(*mut c_void), user_data: Option<*mut c_void>) -> Result<()> {
+        cuda!(@safe cuLaunchHostFunc(self.stream, Some(callback), user_data.unwrap_or(ptr::null_mut())))
     }
 }
 
@@ -337,3 +342,36 @@ impl<'m, 'ctx: 'm>  CudaFunction<'m, 'ctx>  {
     }
 }
 
+pub struct CudaHostPtr<T: Copy>{
+    ptr: *mut T,
+    len: usize
+}
+
+impl<T: Copy> CudaHostPtr<T> {
+    pub fn alloc(len: usize) -> Result<Self> {
+        let bytesize = len * std::mem::size_of::<T>();
+        let mut ptr = unsafe { core::mem::uninitialized() };
+        cuda!(@safe cuMemAllocHost_v2(&mut ptr as *mut _ as *mut _, bytesize))?;
+        Ok(Self{ptr, len})
+    }
+}
+
+impl<T: Copy> AsRef<[T]> for CudaHostPtr<T> {
+    fn as_ref(&self) -> &[T] {
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    }
+}
+
+impl<T: Copy> AsMut<[T]> for CudaHostPtr<T> {
+    fn as_mut(&mut self) -> &mut [T] {
+        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
+    }
+}
+
+impl<T: Copy> Drop for CudaHostPtr<T> {
+    fn drop(&mut self) {
+        cuda!(@safe cuMemFreeHost(self.ptr as *mut _)).unwrap()
+    }
+}
+
+unsafe impl<T: Copy> Send for CudaHostPtr<T> { }
