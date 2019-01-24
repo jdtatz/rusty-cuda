@@ -152,19 +152,19 @@ impl CudaDriver {
         cuda!(@safe cuInit(0))
     }
 
-    pub fn get_device(&self, id: i32) -> Result<CudaDevice> {
+    pub fn get_device(id: i32) -> Result<CudaDevice> {
         let mut device = unsafe { core::mem::uninitialized() };
         cuda!(@safe cuDeviceGet(&mut device as *mut _, id))?;
         Ok(CudaDevice { device })
     }
 
-    pub fn device_count(&self) -> Result<c_int> {
+    pub fn device_count() -> Result<c_int> {
         let mut count = unsafe { core::mem::uninitialized() };
         cuda!(@safe cuDeviceGetCount(&mut count))?;
         Ok(count)
     }
 
-    pub fn get_current_context(&self) -> Result<Option<CudaContext>> {
+    pub fn get_current_context() -> Result<Option<CudaContext>> {
         let mut context = unsafe { core::mem::uninitialized() };
         cuda!(@safe cuCtxGetCurrent(&mut context))?;
         if context.is_null() {
@@ -174,7 +174,6 @@ impl CudaDriver {
         }
     }
 }
-
 
 pub struct CudaDevice {
     device: CUdevice,
