@@ -1,6 +1,6 @@
 use std::os::raw::{c_char, c_int};
 use std::ffi::{CString, CStr, OsStr};
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 #[allow(unused_imports)]
 use failure::ResultExt;
 use dlopen::{utils::platform_file_name, wrapper::{Container, WrapperApi}};
@@ -35,7 +35,7 @@ pub fn as_cstr(bytes: impl AsRef<[u8]>) -> Result<(*const c_char, Option<CString
 }
 
 lazy_static! {
-    static ref NVRTC: Arc<RwLock<Option<Container<NvrtcDylib>>>> = Default::default();
+    static ref NVRTC: RwLock<Option<Container<NvrtcDylib>>> = RwLock::new(None);
 }
 
 macro_rules! nvrtc {

@@ -7,7 +7,7 @@ use std::ptr;
 use std::os::raw::{c_void, c_char, c_int, c_uint};
 use std::ffi::{CString, CStr, OsStr};
 use std::marker::PhantomData;
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 #[allow(unused_imports)]
 use failure::ResultExt;
 #[macro_use] extern crate failure_derive;
@@ -49,7 +49,7 @@ pub fn as_cstr(bytes: impl AsRef<[u8]>) -> Result<(*const c_char, Option<CString
 }
 
 lazy_static! {
-    static ref DRIVER: Arc<RwLock<Option<Container<CudaDriverDyLib>>>> = Default::default();
+    static ref DRIVER: RwLock<Option<Container<CudaDriverDyLib>>> = RwLock::new(None);
 }
 
 macro_rules! cuda {
