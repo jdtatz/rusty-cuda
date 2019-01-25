@@ -7,15 +7,12 @@ edition = '2018'
 
 [features]
 default = []
-static = []
 nvrtc = []
 
 [dependencies]
 derive_more = "0.13"
 failure_derive = "0.1"
 failure = "0.1"
-
-[target.'cfg(not(feature = "static"))'.dependencies]
 lazy_static = "1.2"
 dlopen_derive = "0.1"
 dlopen = "0.1"
