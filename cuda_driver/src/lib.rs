@@ -218,7 +218,7 @@ impl CudaContext {
     pub fn alloc(&self, bytesize: usize) -> Result<CudaDevicePtr> {
         let mut ptr = 0;
         cuda!(@safe cuMemAlloc_v2(&mut ptr, bytesize))?;
-        Ok(CudaDevicePtr { ptr, bytesize, _context: PhantomData })
+        Ok(CudaDevicePtr { ptr, capacity: bytesize, _context: PhantomData })
     }
 
     pub fn create_stream(&self, flag: Option<CUstream_flags>) -> Result<CudaStream> {
@@ -253,7 +253,7 @@ impl<'ctx> CudaModule<'ctx> {
         let mut dptr = 0;
         let mut bytesize = 0;
         cuda!(@safe cuModuleGetGlobal_v2(&mut dptr, &mut bytesize, self.module, ptr))?;
-        Ok(CudaDevicePtr { ptr: dptr, bytesize, _context: PhantomData })
+        Ok(CudaDevicePtr { ptr: dptr, capacity: bytesize, _context: PhantomData })
     }
 }
 
@@ -265,25 +265,26 @@ impl<'ctx>  Drop for CudaModule<'ctx>  {
 
 pub struct CudaDevicePtr<'ctx> {
     ptr: CUdeviceptr,
-    bytesize: usize,
+    pub capacity: usize,
     _context: PhantomData<&'ctx CudaContext>,
 }
 
 impl<'ctx> CudaDevicePtr<'ctx> {
-    pub fn transfer_to_device<T>(&self, src: *const T, bytesize: usize, stream: &CudaStream) -> Result<()> {
-        if bytesize > self.bytesize {
+    pub fn transfer_to_device<T>(&self, src: &[T], stream: &CudaStream) -> Result<()> {
+        let bytesize = src.len() * std::mem::size_of::<T>();
+        if bytesize > self.capacity {
             panic!("Programmer Error: trying to transfer more memory than was allocated")
         } else {
-            cuda!(@safe cuMemcpyHtoDAsync_v2(self.ptr, src as *const c_void, bytesize, stream.stream))
+            cuda!(@safe cuMemcpyHtoDAsync_v2(self.ptr, src.as_ptr() as *const c_void, bytesize, stream.stream))
         }
     }
 
-    pub fn transfer_from_device<T>(&self, dst: *mut T, bytesize: usize, stream: &CudaStream) -> Result<()> {
-        if bytesize > self.bytesize {
+    pub fn transfer_from_device<T>(&self, dst: &mut [T], stream: &CudaStream) -> Result<()> {
+        let bytesize = dst.len() * std::mem::size_of::<T>();
+        if bytesize > self.capacity {
             panic!("Programmer Error: trying to transfer more memory than was allocated")
         } else {
-            cuda!(@safe cuMemcpyDtoHAsync_v2(dst as *mut c_void, self.ptr, bytesize, stream.stream))
-
+            cuda!(@safe cuMemcpyDtoHAsync_v2(dst.as_mut_ptr() as *mut c_void, self.ptr, bytesize, stream.stream))
         }
     }
 
