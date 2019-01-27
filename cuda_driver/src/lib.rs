@@ -6,7 +6,6 @@
 use std::ptr;
 use std::os::raw::{c_void, c_char, c_int, c_uint};
 use std::ffi::{CString, CStr, OsStr};
-use std::marker::PhantomData;
 use std::sync::RwLock;
 #[allow(unused_imports)]
 use failure::ResultExt;
@@ -204,7 +203,7 @@ impl CudaContext {
         let (ptr, _ptx) = as_cstr(ptx)?;
         let mut module = std::ptr::null_mut();
         cuda!(@safe cuModuleLoadData(&mut module, ptr as *const _))?;
-        Ok(CudaModule { module, _context: PhantomData })
+        Ok(CudaModule { module })
     }
 
     pub fn create_module_opts(&self, ptx: impl AsRef<[u8]>, opt_names: &mut [CUjit_option], opt_vals: &mut [*mut c_void]) -> Result<CudaModule> {
@@ -212,20 +211,20 @@ impl CudaContext {
         let (ptr, _ptx) = as_cstr(ptx)?;
         let mut module = std::ptr::null_mut();
         cuda!(@safe cuModuleLoadDataEx(&mut module, ptr as *const _, opt_names.len() as _, opt_names.as_mut_ptr(), opt_vals.as_mut_ptr()))?;
-        Ok(CudaModule { module, _context: PhantomData })
+        Ok(CudaModule { module })
     }
 
     pub fn alloc(&self, bytesize: usize) -> Result<CudaDevicePtr> {
         let mut ptr = 0;
         cuda!(@safe cuMemAlloc_v2(&mut ptr, bytesize))?;
-        Ok(CudaDevicePtr { ptr, capacity: bytesize, _context: PhantomData })
+        Ok(CudaDevicePtr { ptr, capacity: bytesize })
     }
 
     pub fn create_stream(&self, flag: Option<CUstream_flags>) -> Result<CudaStream> {
         let flag = flag.unwrap_or(CUstream_flags::CU_STREAM_DEFAULT);
         let mut stream = std::ptr::null_mut();
         cuda!(@safe cuStreamCreate(&mut stream, flag as _))?;
-        Ok(CudaStream { stream, _context: PhantomData })
+        Ok(CudaStream { stream })
     }
 }
 
@@ -235,17 +234,16 @@ impl Drop for CudaContext {
     }
 }
 
-pub struct CudaModule<'ctx> {
+pub struct CudaModule {
     module: CUmodule,
-    _context: PhantomData<&'ctx CudaContext>,
 }
 
-impl<'ctx> CudaModule<'ctx> {
+impl CudaModule {
     pub fn get_function(&self, function_name: impl AsRef<[u8]>) -> Result<CudaFunction> {
         let (ptr, _fname) = as_cstr(function_name)?;
         let mut function = std::ptr::null_mut();
         cuda!(@safe cuModuleGetFunction(&mut function, self.module, ptr))?;
-        Ok(CudaFunction { function, _module: PhantomData })
+        Ok(CudaFunction { function })
     }
 
     pub fn get_global(&self, global_name: impl AsRef<[u8]>) -> Result<CudaDevicePtr> {
@@ -253,23 +251,22 @@ impl<'ctx> CudaModule<'ctx> {
         let mut dptr = 0;
         let mut bytesize = 0;
         cuda!(@safe cuModuleGetGlobal_v2(&mut dptr, &mut bytesize, self.module, ptr))?;
-        Ok(CudaDevicePtr { ptr: dptr, capacity: bytesize, _context: PhantomData })
+        Ok(CudaDevicePtr { ptr: dptr, capacity: bytesize })
     }
 }
 
-impl<'ctx>  Drop for CudaModule<'ctx>  {
+impl  Drop for CudaModule  {
     fn drop(&mut self) {
         cuda!(@safe cuModuleUnload(self.module)).unwrap()
     }
 }
 
-pub struct CudaDevicePtr<'ctx> {
+pub struct CudaDevicePtr {
     ptr: CUdeviceptr,
     pub capacity: usize,
-    _context: PhantomData<&'ctx CudaContext>,
 }
 
-impl<'ctx> CudaDevicePtr<'ctx> {
+impl CudaDevicePtr {
     pub fn transfer_to_device<T>(&self, src: &[T], stream: &CudaStream) -> Result<()> {
         let bytesize = src.len() * std::mem::size_of::<T>();
         if bytesize > self.capacity {
@@ -293,19 +290,18 @@ impl<'ctx> CudaDevicePtr<'ctx> {
     }
 }
 
-impl<'ctx> Drop for CudaDevicePtr<'ctx> {
+impl Drop for CudaDevicePtr {
     fn drop(&mut self) {
         cuda!(@safe cuMemFree_v2(self.ptr)).unwrap()
 
     }
 }
 
-pub struct CudaStream<'ctx> {
+pub struct CudaStream {
     stream: CUstream,
-    _context: PhantomData<&'ctx CudaContext>,
 }
 
-impl<'ctx>  CudaStream<'ctx>  {
+impl CudaStream  {
     pub fn synchronize(&self) -> Result<()> {
         cuda!(@safe cuStreamSynchronize(self.stream))
     }
@@ -315,18 +311,17 @@ impl<'ctx>  CudaStream<'ctx>  {
     }
 }
 
-impl<'ctx>  Drop for CudaStream<'ctx>  {
+impl Drop for CudaStream {
     fn drop(&mut self) {
         cuda!(@safe cuStreamDestroy_v2(self.stream)).unwrap()
     }
 }
 
-pub struct CudaFunction<'m, 'ctx: 'm> {
+pub struct CudaFunction {
     function: CUfunction,
-    _module: PhantomData<&'m CudaModule<'ctx>>,
 }
 
-impl<'m, 'ctx: 'm>  CudaFunction<'m, 'ctx>  {
+impl CudaFunction  {
     pub fn launch(&self, gridDim: (u32, u32, u32), blockDim: (u32, u32, u32), dynamic_shared_mem_size: u32, stream: &CudaStream, args: &[&CudaDevicePtr]) -> Result<()> {
         let args = args.iter().map(|ptr| ptr.as_ptr()).collect::<Vec<_>>();
         cuda!(@safe cuLaunchKernel(self.function, gridDim.0, gridDim.1, gridDim.2, blockDim.0, blockDim.1, blockDim.2, dynamic_shared_mem_size, stream.stream, args.as_ptr(), ptr::null_mut()))
