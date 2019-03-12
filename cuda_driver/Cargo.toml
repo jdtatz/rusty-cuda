@@ -6,16 +6,16 @@ description = "Dynamic bindings for cuda driver"
 edition = '2018'
 
 [features]
-default = []
+default = ["nvrtc"]
 nvrtc = []
 
 [dependencies]
-derive_more = "0.13"
-failure_derive = "0.1"
+derive_more = "0.14"
 failure = "0.1"
+failure_derive = "0.1"
 lazy_static = "1.2"
-dlopen_derive = "0.1"
 dlopen = "0.1"
+dlopen_derive = "0.1"
 
 [build-dependencies]
 bindgen = "0.47"

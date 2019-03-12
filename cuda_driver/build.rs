@@ -19,11 +19,12 @@ fn main() {
         .whitelist_type("CUmodule")
         .whitelist_type("CUfunction")
         .whitelist_type("CUstream")
-        .whitelist_type("CUhostFn")
+        .whitelist_type("CUevent")
         .whitelist_type("CUdevice_attribute")
         .whitelist_type("CUctx_flags")
         .whitelist_type("CUjit_option")
         .whitelist_type("CUstream_flags")
+        .whitelist_type("CUevent_flags")
         .generate()
         .expect("Unable to generate bindings");
 

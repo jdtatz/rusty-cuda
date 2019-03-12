@@ -1,8 +1,6 @@
 use std::os::raw::{c_char, c_int};
-use std::ffi::{CString, CStr, OsStr};
+use std::ffi::{CString, CStr, OsStr, FromBytesWithNulError};
 use std::sync::RwLock;
-#[allow(unused_imports)]
-use failure::ResultExt;
 use dlopen::{utils::platform_file_name, wrapper::{Container, WrapperApi}};
 
 
@@ -14,25 +12,15 @@ use driver::{nvrtcResult, nvrtcProgram};
 
 #[derive(Fail, Debug, From)]
 pub enum Error{
-    #[fail(display = "Nvrtc Error: {}", _0)]
+    #[fail(display = "NVRTC Error: {}", _0)]
     NvrtcError(String),
-    #[fail(display = "{}", _0)]
-    LibError(dlopen::Error),
-    #[fail(display = "Interior Null at pos: {}", _0)]
-    InteriorNullError(usize)
+    #[fail(display = "NVRTC dynamic library error: {}", _0)]
+    LibError(#[cause] dlopen::Error),
+    #[fail(display = "Null error: {}", _0)]
+    NullError(#[cause] FromBytesWithNulError)
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
-
-pub fn as_cstr(bytes: impl AsRef<[u8]>) -> Result<(*const c_char, Option<CString>)> {
-    if let Ok(cstr) = CStr::from_bytes_with_nul(bytes.as_ref()) {
-        Ok((cstr.as_ptr(), None))
-    } else {
-        CString::new(bytes.as_ref())
-            .map(|cstr| (cstr.as_ptr(), Some(cstr)))
-            .map_err(|e| Error::InteriorNullError(e.nul_position()))
-    }
-}
 
 lazy_static! {
     static ref NVRTC: RwLock<Option<Container<NvrtcDylib>>> = RwLock::new(None);
@@ -93,36 +81,39 @@ impl Nvrtc {
 
     pub fn compile(src: impl AsRef<[u8]>, fname_expr: impl AsRef<[u8]>, compile_opts: &[impl AsRef<[u8]>], prog_name: impl AsRef<[u8]>) -> Result<(CString, CString)> {
         let mut prog = std::ptr::null_mut();
-        let (src_ptr, _src) = as_cstr(src)?;
-        let (prog_name_ptr, _prog_name) = as_cstr(prog_name)?;
-        nvrtc!(@safe nvrtcCreateProgram(&mut prog as *mut _, src_ptr, prog_name_ptr, 0, std::ptr::null(), std::ptr::null()))?;
-        let (fname_expr_ptr, _fname_expr) = as_cstr(fname_expr)?;
-        nvrtc!(@safe nvrtcAddNameExpression(prog, fname_expr_ptr))?;
-        let (copts_ptrs, _copts): (Vec<_>, Vec<_>) = compile_opts.into_iter()
-            .map(|opt| as_cstr(opt))
-            .collect::<Result<Vec<_>>>()?.into_iter().unzip();
-        let result = nvrtc!(nvrtcCompileProgram(prog, copts_ptrs.len() as _, copts_ptrs.as_ptr()));
+        let src = CStr::from_bytes_with_nul(src.as_ref())?.as_ptr();
+        let prog_name = CStr::from_bytes_with_nul(prog_name.as_ref())?.as_ptr();
+        nvrtc!(@safe nvrtcCreateProgram(&mut prog as *mut _, src, prog_name, 0, std::ptr::null(), std::ptr::null()))?;
+        let fname_expr = CStr::from_bytes_with_nul(fname_expr.as_ref())?.as_ptr();
+        nvrtc!(@safe nvrtcAddNameExpression(prog, fname_expr))?;
+        let copts = compile_opts.iter()
+            .map(|opt| CStr::from_bytes_with_nul(opt.as_ref())
+                .map(CStr::as_ptr).map_err(Error::NullError))
+            .collect::<Result<Vec<_>>>()?;
+        let result = nvrtc!(nvrtcCompileProgram(prog, copts.len() as _, copts.as_ptr()));
         if result != nvrtcResult::NVRTC_SUCCESS {
             let err_ptr = nvrtc!(nvrtcGetErrorString(result));
-            let err = unsafe { CStr::from_ptr(err_ptr) }.to_string_lossy().into_owned();
+            let err = unsafe { CStr::from_ptr(err_ptr) }.to_string_lossy();
             let mut log_size = 0;
             nvrtc!(@safe nvrtcGetProgramLogSize(prog, &mut log_size as *mut _))?;
             let mut log = Vec::new();
             log.resize(log_size, 0u8);
             nvrtc!(@safe nvrtcGetProgramLog(prog, log.as_mut_ptr() as *mut _))?;
-            let log = CStr::from_bytes_with_nul(&log).unwrap().to_string_lossy().into_owned();
+            let log = CStr::from_bytes_with_nul(&log).unwrap().to_string_lossy();
             nvrtc!(@safe nvrtcDestroyProgram(&mut prog as *mut _))?;
             return Err(Error::NvrtcError(format!("Failed to compile program: {}\n{}", err, log)));
         }
         let mut lname = std::ptr::null_mut();
-        nvrtc!(@safe nvrtcGetLoweredName(prog, fname_expr_ptr, &mut lname as *mut _ as *mut _))?;
+        nvrtc!(@safe nvrtcGetLoweredName(prog, fname_expr, &mut lname as *mut _ as *mut _))?;
         let name = unsafe { CStr::from_ptr(lname) }.to_owned();
         let mut ptx_size = 0;
         nvrtc!(@safe nvrtcGetPTXSize(prog, &mut ptx_size as *mut _))?;
         let mut ptx = Vec::new();
         ptx.resize(ptx_size, 0u8);
         nvrtc!(@safe nvrtcGetPTX(prog, ptx.as_mut_ptr() as *mut _))?;
-        let ptx = CStr::from_bytes_with_nul(&ptx).unwrap().to_owned();
+        // Only way to convert a Vec<u8> to a CString without additional allocations
+        let _nul = ptx.pop();
+        let ptx = unsafe { CString::from_vec_unchecked(ptx) };
         nvrtc!(@safe nvrtcDestroyProgram(&mut prog as *mut _))?;
         Ok((name, ptx))
     }

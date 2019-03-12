@@ -1,14 +1,13 @@
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
+#![allow(unused_unsafe)]
 #![allow(clippy::too_many_arguments)]
 
 use std::ptr;
 use std::os::raw::{c_void, c_char, c_int, c_uint};
-use std::ffi::{CString, CStr, OsStr};
+use std::ffi::{CStr, OsStr, FromBytesWithNulError};
 use std::sync::RwLock;
-#[allow(unused_imports)]
-use failure::ResultExt;
 #[macro_use] extern crate failure_derive;
 #[macro_use] extern crate derive_more;
 #[macro_use] extern crate dlopen_derive;
@@ -22,30 +21,20 @@ mod driver {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
-use driver::{CUresult, CUdevice, CUdeviceptr, CUcontext, CUstream, CUmodule, CUfunction, CUhostFn};
-pub use driver::{CUDA_VERSION, CUctx_flags, CUstream_flags, CUjit_option, CUdevice_attribute};
+use driver::{CUresult, CUdevice, CUdeviceptr, CUcontext, CUstream, CUevent, CUmodule, CUfunction};
+pub use driver::{CUDA_VERSION, CUctx_flags, CUstream_flags, CUevent_flags, CUjit_option, CUdevice_attribute};
 
 #[derive(Fail, Debug, From)]
 pub enum Error{
-    #[fail(display = "CudaDriver Error: {}", _0)]
+    #[fail(display = "CUDA Driver Error: {}", _0)]
     CudaError(String),
-    #[fail(display = "{}", _0)]
-    LibError(dlopen::Error),
-    #[fail(display = "Interior Null at pos: {}", _0)]
-    InteriorNullError(usize)
+    #[fail(display = "CUDA Driver dynamic library error: {}", _0)]
+    LibError(#[cause] dlopen::Error),
+    #[fail(display = "Null error: {}", _0)]
+    NullError(#[cause] FromBytesWithNulError)
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
-
-pub fn as_cstr(bytes: impl AsRef<[u8]>) -> Result<(*const c_char, Option<CString>)> {
-    if let Ok(cstr) = CStr::from_bytes_with_nul(bytes.as_ref()) {
-        Ok((cstr.as_ptr(), None))
-    } else {
-        CString::new(bytes.as_ref())
-            .map(|cstr| (cstr.as_ptr(), Some(cstr)))
-            .map_err(|e| Error::InteriorNullError(e.nul_position()))
-    }
-}
 
 lazy_static! {
     static ref DRIVER: RwLock<Option<Container<CudaDriverDyLib>>> = RwLock::new(None);
@@ -90,6 +79,25 @@ impl From<CUresult> for Result<()> {
     }
 }
 
+pub trait DeviceCopyable {
+    fn as_ptr(&self) -> *const c_void;
+}
+
+macro_rules! device_copyable {
+    ($($t:ty)*) => {
+        $(
+            impl DeviceCopyable for $t {
+                fn as_ptr(&self) -> *const c_void {
+                    self as *const $t as *const c_void
+                }
+            }
+        )*
+    };
+}
+
+device_copyable!(i8 u8 i16 u16 i32 u32 i64 u64 f32 f64);
+
+
 #[derive(WrapperApi)]
 struct CudaDriverDyLib {
     cuGetErrorName: unsafe extern "C" fn(err: CUresult, pStr: *mut *const c_char) -> CUresult,
@@ -118,13 +126,21 @@ struct CudaDriverDyLib {
     cuMemcpyDtoHAsync_v2: unsafe extern "C" fn(dst: *mut c_void, src: CUdeviceptr, bytesize: usize, stream: CUstream) -> CUresult,
     cuMemFree_v2: unsafe extern "C" fn(dptr: CUdeviceptr) -> CUresult,
     cuMemFreeHost: unsafe extern "C" fn(dptr: *const c_void) -> CUresult,
+    cuMemHostRegister_v2: unsafe extern "C" fn(p: *const c_void, bytesize: usize, flags: c_uint) -> CUresult,
+    cuMemHostUnregister: unsafe extern "C" fn(p: *const c_void) -> CUresult,
 
     cuStreamCreate: unsafe extern "C" fn(pStream: *mut CUstream, flags: CUstream_flags) -> CUresult,
     cuStreamSynchronize: unsafe extern "C" fn(stream: CUstream) -> CUresult,
     cuStreamDestroy_v2: unsafe extern "C" fn(stream: CUstream) -> CUresult,
 
+    cuEventCreate: unsafe extern "C" fn(phEvent: *mut CUevent, flags: CUevent_flags) -> CUresult,
+    cuEventRecord: unsafe extern "C" fn(hEvent: CUevent, stream: CUstream) -> CUresult,
+    cuEventSynchronize: unsafe extern "C" fn(hEvent: CUevent) -> CUresult,
+    cuEventElapsedTime: unsafe extern "C" fn(pMilliseconds: *mut f32, hStart: CUevent, hEnd: CUevent) -> CUresult,
+    cuEventQuery: unsafe extern "C" fn(event: CUevent) -> CUresult,
+    cuEventDestroy: unsafe extern "C" fn(hEvent: CUevent) -> CUresult,
+
     cuLaunchKernel: unsafe extern "C" fn(f: CUfunction, gridDimX: c_uint, gridDimY: c_uint, gridDimZ: c_uint, blockDimX: c_uint, blockDimY: c_uint, blockDimZ: c_uint, sharedMemBytes: c_uint, stream: CUstream, params: *const *const c_void, extra: *const *const c_void) -> CUresult,
-    cuLaunchHostFunc: unsafe extern "C" fn(stream: CUstream, func: CUhostFn, user_data: *mut c_void) -> CUresult
 }
 
 pub struct CudaDriver;
@@ -162,6 +178,15 @@ impl CudaDriver {
             Ok(Some(CudaContext { context }))
         }
     }
+
+    pub unsafe fn register_pinned(ptr: *const c_void, bytesize: usize) -> Result<()> {
+        cuda!(@safe cuMemHostRegister_v2(ptr, bytesize, 0x1))
+    }
+
+    pub unsafe fn unregister_pinned(ptr: *const c_void) -> Result<()> {
+        cuda!(@safe cuMemHostUnregister(ptr))
+    }
+
 }
 
 pub struct CudaDevice {
@@ -200,17 +225,17 @@ impl CudaContext {
     }
 
     pub fn create_module(&self, ptx: impl AsRef<[u8]>) -> Result<CudaModule> {
-        let (ptr, _ptx) = as_cstr(ptx)?;
+        let ptx = CStr::from_bytes_with_nul(ptx.as_ref()).expect("Nul?").as_ptr();
         let mut module = std::ptr::null_mut();
-        cuda!(@safe cuModuleLoadData(&mut module, ptr as *const _))?;
+        cuda!(@safe cuModuleLoadData(&mut module, ptx as *const _))?;
         Ok(CudaModule { module })
     }
 
     pub fn create_module_opts(&self, ptx: impl AsRef<[u8]>, opt_names: &mut [CUjit_option], opt_vals: &mut [*mut c_void]) -> Result<CudaModule> {
         assert_eq!(opt_names.len(), opt_vals.len(), "The number of values must be equal to the number of names");
-        let (ptr, _ptx) = as_cstr(ptx)?;
+        let ptx = CStr::from_bytes_with_nul(ptx.as_ref())?.as_ptr();
         let mut module = std::ptr::null_mut();
-        cuda!(@safe cuModuleLoadDataEx(&mut module, ptr as *const _, opt_names.len() as _, opt_names.as_mut_ptr(), opt_vals.as_mut_ptr()))?;
+        cuda!(@safe cuModuleLoadDataEx(&mut module, ptx as *const _, opt_names.len() as _, opt_names.as_mut_ptr(), opt_vals.as_mut_ptr()))?;
         Ok(CudaModule { module })
     }
 
@@ -226,6 +251,13 @@ impl CudaContext {
         cuda!(@safe cuStreamCreate(&mut stream, flag as _))?;
         Ok(CudaStream { stream })
     }
+
+    pub fn create_event(&self, flag: Option<CUevent_flags>) -> Result<CudaEvent> {
+        let flag = flag.unwrap_or(CUevent_flags::CU_EVENT_DEFAULT);
+        let mut event = std::ptr::null_mut();
+        cuda!(@safe cuEventCreate(&mut event, flag as _))?;
+        Ok(CudaEvent { event })
+    }
 }
 
 impl Drop for CudaContext {
@@ -234,23 +266,26 @@ impl Drop for CudaContext {
     }
 }
 
+unsafe impl Send for CudaContext { }
+unsafe impl Sync for CudaContext { }
+
 pub struct CudaModule {
     module: CUmodule,
 }
 
 impl CudaModule {
     pub fn get_function(&self, function_name: impl AsRef<[u8]>) -> Result<CudaFunction> {
-        let (ptr, _fname) = as_cstr(function_name)?;
+        let function_name = CStr::from_bytes_with_nul(function_name.as_ref())?.as_ptr();
         let mut function = std::ptr::null_mut();
-        cuda!(@safe cuModuleGetFunction(&mut function, self.module, ptr))?;
+        cuda!(@safe cuModuleGetFunction(&mut function, self.module, function_name))?;
         Ok(CudaFunction { function })
     }
 
     pub fn get_global(&self, global_name: impl AsRef<[u8]>) -> Result<CudaDevicePtr> {
-        let (ptr, _gname) = as_cstr(global_name)?;
+        let global_name = CStr::from_bytes_with_nul(global_name.as_ref())?.as_ptr();
         let mut dptr = 0;
         let mut bytesize = 0;
-        cuda!(@safe cuModuleGetGlobal_v2(&mut dptr, &mut bytesize, self.module, ptr))?;
+        cuda!(@safe cuModuleGetGlobal_v2(&mut dptr, &mut bytesize, self.module, global_name))?;
         Ok(CudaDevicePtr { ptr: dptr, capacity: bytesize })
     }
 }
@@ -261,13 +296,16 @@ impl  Drop for CudaModule  {
     }
 }
 
+unsafe impl Send for CudaModule { }
+unsafe impl Sync for CudaModule { }
+
 pub struct CudaDevicePtr {
     ptr: CUdeviceptr,
     pub capacity: usize,
 }
 
 impl CudaDevicePtr {
-    pub fn transfer_to_device<T>(&self, src: &[T], stream: &CudaStream) -> Result<()> {
+    pub fn transfer_to_device<T: Copy>(&self, src: &[T], stream: &CudaStream) -> Result<()> {
         let bytesize = src.len() * std::mem::size_of::<T>();
         if bytesize > self.capacity {
             panic!("Programmer Error: trying to transfer more memory than was allocated")
@@ -276,7 +314,7 @@ impl CudaDevicePtr {
         }
     }
 
-    pub fn transfer_from_device<T>(&self, dst: &mut [T], stream: &CudaStream) -> Result<()> {
+    pub fn transfer_from_device<T: Copy>(&self, dst: &mut [T], stream: &CudaStream) -> Result<()> {
         let bytesize = dst.len() * std::mem::size_of::<T>();
         if bytesize > self.capacity {
             panic!("Programmer Error: trying to transfer more memory than was allocated")
@@ -284,8 +322,10 @@ impl CudaDevicePtr {
             cuda!(@safe cuMemcpyDtoHAsync_v2(dst.as_mut_ptr() as *mut c_void, self.ptr, bytesize, stream.stream))
         }
     }
+}
 
-    pub fn as_ptr(&self) -> *const c_void {
+impl DeviceCopyable for CudaDevicePtr {
+    fn as_ptr(&self) -> *const c_void {
         (&self.ptr as *const CUdeviceptr) as *const c_void
     }
 }
@@ -293,7 +333,6 @@ impl CudaDevicePtr {
 impl Drop for CudaDevicePtr {
     fn drop(&mut self) {
         cuda!(@safe cuMemFree_v2(self.ptr)).unwrap()
-
     }
 }
 
@@ -305,10 +344,6 @@ impl CudaStream  {
     pub fn synchronize(&self) -> Result<()> {
         cuda!(@safe cuStreamSynchronize(self.stream))
     }
-
-    pub fn add_callback(&self, callback: unsafe extern "C" fn(*mut c_void), user_data: Option<*mut c_void>) -> Result<()> {
-        cuda!(@safe cuLaunchHostFunc(self.stream, Some(callback), user_data.unwrap_or(ptr::null_mut())))
-    }
 }
 
 impl Drop for CudaStream {
@@ -317,16 +352,61 @@ impl Drop for CudaStream {
     }
 }
 
+unsafe impl Send for CudaStream { }
+unsafe impl Sync for CudaStream { }
+
+
+pub struct CudaEvent {
+    event: CUevent,
+}
+
+impl CudaEvent {
+    pub fn synchronize(&self) -> Result<()> {
+        cuda!(@safe cuEventSynchronize(self.event))
+    }
+
+    pub fn record(&self, stream: &CudaStream) -> Result<()> {
+        cuda!(@safe cuEventRecord(self.event, stream.stream))
+    }
+
+    pub fn elapsed_time(&self, start: &Self) -> Result<f32> {
+        let mut val = 0.;
+        cuda!(@safe cuEventElapsedTime(&mut val as *mut f32, start.event, self.event))?;
+        Ok(val)
+    }
+
+    pub fn is_finished(&self) -> Result<bool> {
+        match cuda!(cuEventQuery(self.event)) {
+            CUresult::CUDA_SUCCESS => Ok(true),
+            CUresult::CUDA_ERROR_NOT_READY => Ok(false),
+            r => Result::from(r).map(|_| false)
+        }
+    }
+}
+
+impl Drop for CudaEvent {
+    fn drop(&mut self) {
+        cuda!(@safe cuEventDestroy(self.event)).unwrap()
+    }
+}
+
+unsafe impl Send for CudaEvent { }
+unsafe impl Sync for CudaEvent { }
+
+
 pub struct CudaFunction {
     function: CUfunction,
 }
 
 impl CudaFunction  {
-    pub fn launch(&self, gridDim: (u32, u32, u32), blockDim: (u32, u32, u32), dynamic_shared_mem_size: u32, stream: &CudaStream, args: &[&CudaDevicePtr]) -> Result<()> {
+    pub fn launch(&self, gridDim: (u32, u32, u32), blockDim: (u32, u32, u32), dynamic_shared_mem_size: u32, stream: &CudaStream, args: &[&dyn DeviceCopyable]) -> Result<()> {
         let args = args.iter().map(|ptr| ptr.as_ptr()).collect::<Vec<_>>();
         cuda!(@safe cuLaunchKernel(self.function, gridDim.0, gridDim.1, gridDim.2, blockDim.0, blockDim.1, blockDim.2, dynamic_shared_mem_size, stream.stream, args.as_ptr(), ptr::null_mut()))
     }
 }
+
+unsafe impl Send for CudaFunction { }
+unsafe impl Sync for CudaFunction { }
 
 pub struct CudaHostPtr<T: Copy>{
     ptr: *mut T,
@@ -361,3 +441,4 @@ impl<T: Copy> Drop for CudaHostPtr<T> {
 }
 
 unsafe impl<T: Copy> Send for CudaHostPtr<T> { }
+unsafe impl<T: Copy> Sync for CudaHostPtr<T> { }
