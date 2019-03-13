@@ -262,7 +262,7 @@ impl CudaContext {
 
 impl Drop for CudaContext {
     fn drop(&mut self) {
-        cuda!(@safe cuCtxDestroy_v2(self.context)).unwrap()
+        cuda!(cuCtxDestroy_v2(self.context))
     }
 }
 
@@ -292,7 +292,7 @@ impl CudaModule {
 
 impl  Drop for CudaModule  {
     fn drop(&mut self) {
-        cuda!(@safe cuModuleUnload(self.module)).unwrap()
+        cuda!(cuModuleUnload(self.module))
     }
 }
 
@@ -332,7 +332,7 @@ impl DeviceCopyable for CudaDevicePtr {
 
 impl Drop for CudaDevicePtr {
     fn drop(&mut self) {
-        cuda!(@safe cuMemFree_v2(self.ptr)).unwrap()
+        cuda!(cuMemFree_v2(self.ptr))
     }
 }
 
@@ -348,7 +348,7 @@ impl CudaStream  {
 
 impl Drop for CudaStream {
     fn drop(&mut self) {
-        cuda!(@safe cuStreamDestroy_v2(self.stream)).unwrap()
+        cuda!(cuStreamDestroy_v2(self.stream))
     }
 }
 
@@ -386,7 +386,7 @@ impl CudaEvent {
 
 impl Drop for CudaEvent {
     fn drop(&mut self) {
-        cuda!(@safe cuEventDestroy(self.event)).unwrap()
+        cuda!(cuEventDestroy(self.event))
     }
 }
 
@@ -436,7 +436,7 @@ impl<T: Copy> AsMut<[T]> for CudaHostPtr<T> {
 
 impl<T: Copy> Drop for CudaHostPtr<T> {
     fn drop(&mut self) {
-        cuda!(@safe cuMemFreeHost(self.ptr as *mut _)).unwrap()
+        cuda!(cuMemFreeHost(self.ptr as *mut _))
     }
 }
 
