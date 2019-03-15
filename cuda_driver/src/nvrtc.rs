@@ -71,10 +71,13 @@ struct NvrtcDylib {
 pub struct Nvrtc;
 
 impl Nvrtc {
-    pub fn init(libnvrtc_path: Option<&OsStr>) -> Result<()> {
-        let default = platform_file_name("nvrtc");
-        let libnvrtc_path = libnvrtc_path.unwrap_or(&default);
-        let lib: Container<NvrtcDylib> = unsafe { Container::load(libnvrtc_path) }?;
+    pub fn init(libnvrtc_path: Option<&OsStr>, cuda_version: Option<(i32, i32)>) -> Result<()> {
+        let path = match (libnvrtc_path, cuda_version) {
+            (Some(p), _) => std::ffi::OsString::from(p),
+            (_, Some((major, minor))) if cfg!(windows) => platform_file_name(format!("nvrtc64_{}{}", major, minor)),
+            _ => platform_file_name("nvrtc")
+        };
+        let lib: Container<NvrtcDylib> = unsafe { Container::load(path) }?;
         *NVRTC.try_write().unwrap() = Some(lib);
         Ok(())
     }
