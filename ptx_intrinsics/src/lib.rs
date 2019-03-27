@@ -1,9 +1,16 @@
 #![no_std]
-#![feature(core_intrinsics, asm, link_llvm_intrinsics, alloc, alloc_error_handler, panic_info_message)]
+#![feature(
+    core_intrinsics,
+    asm,
+    link_llvm_intrinsics,
+    alloc,
+    alloc_error_handler,
+    panic_info_message
+)]
 #![allow(non_camel_case_types)]
 extern crate alloc;
 
-extern {
+extern "C" {
     #[link_name = "llvm.nvvm.read.ptx.sreg.tid.x"]
     fn read_ptx_sreg_tid_x() -> i32;
     #[link_name = "llvm.nvvm.read.ptx.sreg.tid.y"]
@@ -58,7 +65,13 @@ extern {
     #[link_name = "free"]
     pub fn free(ptr: *mut u8);
     #[link_name = "__assertfail"]
-    pub fn __assertfail(message: *const u8, file: *const u8, line: u32, function: *const u8, char_size: usize);
+    pub fn __assertfail(
+        message: *const u8,
+        file: *const u8,
+        line: u32,
+        function: *const u8,
+        char_size: usize,
+    );
 }
 
 pub struct CudaSysAllocator;
@@ -81,22 +94,27 @@ unsafe fn cuda_sys_alloc_err(_: core::alloc::Layout) -> ! {
 }
 
 pub fn cuda_assert(msg: &str, file: &str, line: u32, function: &str) {
-    unsafe {
-        __assertfail(msg.as_ptr(), file.as_ptr(), line, function.as_ptr(), 1)
-    }
+    unsafe { __assertfail(msg.as_ptr(), file.as_ptr(), line, function.as_ptr(), 1) }
 }
 
 #[panic_handler]
 unsafe fn cuda_panic_handler(panic_info: &core::panic::PanicInfo) -> ! {
-    #[cfg(feature = "noisy-errors")] {
+    #[cfg(feature = "noisy-errors")]
+    {
         use alloc::prelude::*;
-        let (file, line) = panic_info.location().map_or(("", 0), |l| (l.file(), l.line()));
+        let (file, line) = panic_info
+            .location()
+            .map_or(("", 0), |l| (l.file(), l.line()));
         let func = "Unknown Function";
         if let Some(msg) = panic_info.payload().downcast_ref::<&str>() {
             cuda_assert(msg, file, line, func);
         } else if let Some(args) = panic_info.message() {
             let mut output = String::new();
-            let msg = core::fmt::write(&mut output, *args).ok().map_or("Error occurred while trying to write in String", |_| &output);
+            let msg = core::fmt::write(&mut output, *args)
+                .ok()
+                .map_or("Error occurred while trying to write in String", |_| {
+                    &output
+                });
             cuda_assert(&msg, file, line, func);
         } else {
             let msg = "panic occurred";
@@ -127,7 +145,7 @@ pub fn dynamic_shared_ref<T: Copy + Sized>(offset: usize) -> &'static mut T {
         if core::mem::size_of::<T>() + offset > max_size as usize {
             panic!("Requested more dynamic memory than what was allocated at kernel launch!")
         }
-        &mut * (ptr.add(offset) as *mut T)
+        &mut *(ptr.add(offset) as *mut T)
     }
 }
 
@@ -219,22 +237,21 @@ pub fn syncthreads_count(test: bool) -> usize {
 }
 
 macro_rules! any_shfl {
-    ( $N:ty, $shfl_func:ident, $mask:ident, $value:ident, $offset:ident, $packing:ident ) => {
-        {
-            assert_eq!(0, core::mem::size_of::<$N>() % 4);
-            unsafe {
-                let mut out: $N = core::mem::uninitialized();
-                let in_ptr = & $value as *const $N as *const f32;
-                let out_ptr = &mut out as *mut $N as *mut f32;
-                for i in 0..(core::mem::size_of::<$N>() / 4) {
-                    out_ptr.add(i).write($shfl_func($mask, in_ptr.add(i).read(), $offset, $packing));
-                }
-                out
+    ( $N:ty, $shfl_func:ident, $mask:ident, $value:ident, $offset:ident, $packing:ident ) => {{
+        assert_eq!(0, core::mem::size_of::<$N>() % 4);
+        unsafe {
+            let mut out: $N = core::mem::uninitialized();
+            let in_ptr = &$value as *const $N as *const f32;
+            let out_ptr = &mut out as *mut $N as *mut f32;
+            for i in 0..(core::mem::size_of::<$N>() / 4) {
+                out_ptr
+                    .add(i)
+                    .write($shfl_func($mask, in_ptr.add(i).read(), $offset, $packing));
             }
+            out
         }
-    };
+    }};
 }
-
 
 pub fn shfl_sync<N: Copy + Sized>(mask: i32, value: N, idx: i32) -> N {
     const PACKING: i32 = 0x1f;
@@ -273,12 +290,14 @@ pub fn reduce<N: Copy + Sized + 'static, F: Fn(N, N) -> N>(f: F, value: N, width
     let laneid = laneid();
     let mut val = value;
     if width <= WARP_SIZE && is_pow_2(width) {
-        for i in 0..ilog2(width){
+        for i in 0..ilog2(width) {
             val = f(val, shfl_bfly_sync(MASK, val, 1_i32 << i));
         }
         let shared = dynamic_shared_ref(0);
         syncthreads();
-        if tid == 0 { *shared = val; }
+        if tid == 0 {
+            *shared = val;
+        }
         syncthreads();
         let value = *shared;
         syncthreads();
@@ -287,15 +306,17 @@ pub fn reduce<N: Copy + Sized + 'static, F: Fn(N, N) -> N>(f: F, value: N, width
         let closest_pow2 = 1 << ilog2(width);
         let diff = width - closest_pow2;
         let temp = shfl_down_sync(MASK, val, closest_pow2 as i32);
-        if laneid < diff{
+        if laneid < diff {
             val = f(val, temp);
         }
-        for i in 0..ilog2(width){
+        for i in 0..ilog2(width) {
             val = f(val, shfl_bfly_sync(MASK, val, 1_i32 << i));
         }
         let shared = dynamic_shared_ref(0);
         syncthreads();
-        if tid == 0 { *shared = val; }
+        if tid == 0 {
+            *shared = val;
+        }
         syncthreads();
         let value = *shared;
         syncthreads();
@@ -306,20 +327,20 @@ pub fn reduce<N: Copy + Sized + 'static, F: Fn(N, N) -> N>(f: F, value: N, width
         let shared_buffer = dynamic_shared_slice(warp_count as usize, 0);
         syncthreads();
         if last_warp_size == 0 || tid < width - last_warp_size {
-            for i in 0..ilog2(WARP_SIZE){
+            for i in 0..ilog2(WARP_SIZE) {
                 val = f(val, shfl_bfly_sync(MASK, val, 1_i32 << i))
             }
         } else if is_pow_2(last_warp_size) {
-            for i in 0..ilog2(last_warp_size){
+            for i in 0..ilog2(last_warp_size) {
                 val = f(val, shfl_bfly_sync(MASK, val, 1_i32 << i))
             }
         } else {
             let closest_lpow2 = 1 << ilog2(last_warp_size);
             let temp = shfl_down_sync(MASK, val, closest_lpow2 as i32);
-            if laneid < last_warp_size - closest_lpow2{
+            if laneid < last_warp_size - closest_lpow2 {
                 val = f(val, temp);
             }
-            for i in 0..ilog2(closest_lpow2){
+            for i in 0..ilog2(closest_lpow2) {
                 val = f(val, shfl_bfly_sync(MASK, val, 1_i32 << i));
             }
         }

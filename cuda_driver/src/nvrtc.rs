@@ -1,17 +1,19 @@
-use std::os::raw::{c_void, c_char, c_int};
-use std::ffi::{CString, CStr, OsStr, FromBytesWithNulError};
+use dlopen::{
+    utils::platform_file_name,
+    wrapper::{Container, WrapperApi},
+};
+use std::ffi::{CStr, CString, FromBytesWithNulError, OsStr};
+use std::os::raw::{c_char, c_int, c_void};
 use std::sync::RwLock;
-use dlopen::{utils::platform_file_name, wrapper::{Container, WrapperApi}};
-
 
 #[derive(Fail, Debug, From)]
-pub enum Error{
+pub enum Error {
     #[fail(display = "NVRTC Error: {}", _0)]
     NvrtcError(String),
     #[fail(display = "NVRTC dynamic library error: {}", _0)]
     LibError(#[cause] dlopen::Error),
     #[fail(display = "Null error: {}", _0)]
-    NullError(#[cause] FromBytesWithNulError)
+    NullError(#[cause] FromBytesWithNulError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -52,20 +54,36 @@ impl From<nvrtcResult> for Result<()> {
     }
 }
 
-
 #[derive(WrapperApi)]
 struct NvrtcDylib {
     nvrtcGetErrorString: unsafe extern "C" fn(result: nvrtcResult) -> *const c_char,
     // nvrtcVersion: unsafe extern "C" fn(major: *mut c_int, minor: *mut c_int) -> nvrtcResult,
-    nvrtcAddNameExpression: unsafe extern "C" fn(prog: nvrtcProgram, name: *const c_char) -> nvrtcResult,
-    nvrtcCompileProgram: unsafe extern "C" fn(prog: nvrtcProgram, num_opts: c_int, opt: *const *const c_char) -> nvrtcResult,
-    nvrtcCreateProgram: unsafe extern "C" fn(prog: *mut nvrtcProgram, src: *const c_char, name: *const c_char, num_header: c_int, headers: *const *const c_char, include_names: *const *const c_char) -> nvrtcResult,
+    nvrtcAddNameExpression:
+        unsafe extern "C" fn(prog: nvrtcProgram, name: *const c_char) -> nvrtcResult,
+    nvrtcCompileProgram: unsafe extern "C" fn(
+        prog: nvrtcProgram,
+        num_opts: c_int,
+        opt: *const *const c_char,
+    ) -> nvrtcResult,
+    nvrtcCreateProgram: unsafe extern "C" fn(
+        prog: *mut nvrtcProgram,
+        src: *const c_char,
+        name: *const c_char,
+        num_header: c_int,
+        headers: *const *const c_char,
+        include_names: *const *const c_char,
+    ) -> nvrtcResult,
     nvrtcDestroyProgram: unsafe extern "C" fn(prog: *mut nvrtcProgram) -> nvrtcResult,
-    nvrtcGetLoweredName: unsafe extern "C" fn(prog: nvrtcProgram, name_expression: *const c_char, lowered_name: *mut *const c_char) -> nvrtcResult,
+    nvrtcGetLoweredName: unsafe extern "C" fn(
+        prog: nvrtcProgram,
+        name_expression: *const c_char,
+        lowered_name: *mut *const c_char,
+    ) -> nvrtcResult,
     nvrtcGetPTX: unsafe extern "C" fn(prog: nvrtcProgram, ptx: *mut c_char) -> nvrtcResult,
     nvrtcGetPTXSize: unsafe extern "C" fn(prog: nvrtcProgram, ptx_size: *mut usize) -> nvrtcResult,
     nvrtcGetProgramLog: unsafe extern "C" fn(prog: nvrtcProgram, log: *mut c_char) -> nvrtcResult,
-    nvrtcGetProgramLogSize: unsafe extern "C" fn(prog: nvrtcProgram, log_size: *mut usize) -> nvrtcResult,
+    nvrtcGetProgramLogSize:
+        unsafe extern "C" fn(prog: nvrtcProgram, log_size: *mut usize) -> nvrtcResult,
 }
 
 pub struct Nvrtc;
@@ -74,24 +92,35 @@ impl Nvrtc {
     pub fn init(libnvrtc_path: Option<&OsStr>, cuda_version: Option<(i32, i32)>) -> Result<()> {
         let path = match (libnvrtc_path, cuda_version) {
             (Some(p), _) => std::ffi::OsString::from(p),
-            (_, Some((major, minor))) if cfg!(windows) => platform_file_name(format!("nvrtc64_{}{}", major, minor)),
-            _ => platform_file_name("nvrtc")
+            (_, Some((major, minor))) if cfg!(windows) => {
+                platform_file_name(format!("nvrtc64_{}{}", major, minor))
+            }
+            _ => platform_file_name("nvrtc"),
         };
         let lib: Container<NvrtcDylib> = unsafe { Container::load(path) }?;
         *NVRTC.try_write().unwrap() = Some(lib);
         Ok(())
     }
 
-    pub fn compile(src: impl AsRef<[u8]>, fname_expr: impl AsRef<[u8]>, compile_opts: &[impl AsRef<[u8]>], prog_name: impl AsRef<[u8]>) -> Result<(CString, CString)> {
+    pub fn compile(
+        src: impl AsRef<[u8]>,
+        fname_expr: impl AsRef<[u8]>,
+        compile_opts: &[impl AsRef<[u8]>],
+        prog_name: impl AsRef<[u8]>,
+    ) -> Result<(CString, CString)> {
         let mut prog = std::ptr::null_mut();
         let src = CStr::from_bytes_with_nul(src.as_ref())?.as_ptr();
         let prog_name = CStr::from_bytes_with_nul(prog_name.as_ref())?.as_ptr();
         nvrtc!(@safe nvrtcCreateProgram(&mut prog as *mut _, src, prog_name, 0, std::ptr::null(), std::ptr::null()))?;
         let fname_expr = CStr::from_bytes_with_nul(fname_expr.as_ref())?.as_ptr();
         nvrtc!(@safe nvrtcAddNameExpression(prog, fname_expr))?;
-        let copts = compile_opts.iter()
-            .map(|opt| CStr::from_bytes_with_nul(opt.as_ref())
-                .map(CStr::as_ptr).map_err(Error::NullError))
+        let copts = compile_opts
+            .iter()
+            .map(|opt| {
+                CStr::from_bytes_with_nul(opt.as_ref())
+                    .map(CStr::as_ptr)
+                    .map_err(Error::NullError)
+            })
             .collect::<Result<Vec<_>>>()?;
         let result = nvrtc!(nvrtcCompileProgram(prog, copts.len() as _, copts.as_ptr()));
         if result != NVRTC_SUCCESS {
@@ -104,7 +133,10 @@ impl Nvrtc {
             nvrtc!(@safe nvrtcGetProgramLog(prog, log.as_mut_ptr() as *mut _))?;
             let log = CStr::from_bytes_with_nul(&log).unwrap().to_string_lossy();
             nvrtc!(@safe nvrtcDestroyProgram(&mut prog as *mut _))?;
-            return Err(Error::NvrtcError(format!("Failed to compile program: {}\n{}", err, log)));
+            return Err(Error::NvrtcError(format!(
+                "Failed to compile program: {}\n{}",
+                err, log
+            )));
         }
         let mut lname = std::ptr::null_mut();
         nvrtc!(@safe nvrtcGetLoweredName(prog, fname_expr, &mut lname as *mut _ as *mut _))?;
