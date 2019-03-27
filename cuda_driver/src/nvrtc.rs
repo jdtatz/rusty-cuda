@@ -1,14 +1,8 @@
-use std::os::raw::{c_char, c_int};
+use std::os::raw::{c_void, c_char, c_int};
 use std::ffi::{CString, CStr, OsStr, FromBytesWithNulError};
 use std::sync::RwLock;
 use dlopen::{utils::platform_file_name, wrapper::{Container, WrapperApi}};
 
-
-mod driver {
-    include!(concat!(env!("OUT_DIR"), "/nvrtc_bindings.rs"));
-}
-
-use driver::{nvrtcResult, nvrtcProgram};
 
 #[derive(Fail, Debug, From)]
 pub enum Error{
@@ -21,6 +15,12 @@ pub enum Error{
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[repr(transparent)]
+#[derive(From, PartialEq, Eq)]
+struct nvrtcResult(u32);
+type nvrtcProgram = *mut c_void;
+const NVRTC_SUCCESS: nvrtcResult = nvrtcResult(0);
 
 lazy_static! {
     static ref NVRTC: RwLock<Option<Container<NvrtcDylib>>> = RwLock::new(None);
@@ -41,7 +41,7 @@ macro_rules! nvrtc {
 impl From<nvrtcResult> for Result<()> {
     fn from(result: nvrtcResult) -> Self {
         match result {
-            nvrtcResult::NVRTC_SUCCESS => Ok(()),
+            NVRTC_SUCCESS => Ok(()),
             _ => {
                 let err_ptr = nvrtc!(nvrtcGetErrorString(result));
                 let err_cstr = unsafe { CStr::from_ptr(err_ptr) };
@@ -94,7 +94,7 @@ impl Nvrtc {
                 .map(CStr::as_ptr).map_err(Error::NullError))
             .collect::<Result<Vec<_>>>()?;
         let result = nvrtc!(nvrtcCompileProgram(prog, copts.len() as _, copts.as_ptr()));
-        if result != nvrtcResult::NVRTC_SUCCESS {
+        if result != NVRTC_SUCCESS {
             let err_ptr = nvrtc!(nvrtcGetErrorString(result));
             let err = unsafe { CStr::from_ptr(err_ptr) }.to_string_lossy();
             let mut log_size = 0;

@@ -17,12 +17,182 @@ use dlopen::{utils::platform_file_name, wrapper::{Container, WrapperApi}};
 #[cfg(feature = "nvrtc")]
 pub mod nvrtc;
 
-mod driver {
-    include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+#[repr(transparent)]
+#[derive(From, PartialEq, Eq, Clone, Copy)]
+struct CUresult(u32);
+type CUdevice = c_int;
+type CUdeviceptr = usize;
+type CUcontext = *mut c_void;
+type CUstream = *mut c_void;
+type CUevent = *mut c_void;
+type CUmodule = *mut c_void;
+type CUfunction = *mut c_void;
+
+pub const CUDA_VERSION: u32 = 10000;
+const CUDA_SUCCESS: CUresult = CUresult(0);
+const CUDA_ERROR_NOT_READY: CUresult = CUresult(600);
+
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum CUctx_flags {
+    CU_CTX_SCHED_AUTO = 0,
+    CU_CTX_SCHED_SPIN = 1,
+    CU_CTX_SCHED_YIELD = 2,
+    CU_CTX_SCHED_BLOCKING_SYNC = 4,
+    CU_CTX_SCHED_MASK = 7,
+    CU_CTX_MAP_HOST = 8,
+    CU_CTX_LMEM_RESIZE_TO_MAX = 16,
+    CU_CTX_FLAGS_MASK = 31,
 }
 
-use driver::{CUresult, CUdevice, CUdeviceptr, CUcontext, CUstream, CUevent, CUmodule, CUfunction};
-pub use driver::{CUDA_VERSION, CUctx_flags, CUstream_flags, CUevent_flags, CUjit_option, CUdevice_attribute};
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum CUstream_flags {
+    CU_STREAM_DEFAULT = 0,
+    CU_STREAM_NON_BLOCKING = 1,
+}
+
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum CUevent_flags {
+    CU_EVENT_DEFAULT = 0,
+    CU_EVENT_BLOCKING_SYNC = 1,
+    CU_EVENT_DISABLE_TIMING = 2,
+    CU_EVENT_INTERPROCESS = 4,
+}
+
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum CUjit_option {
+    CU_JIT_MAX_REGISTERS = 0,
+    CU_JIT_THREADS_PER_BLOCK = 1,
+    CU_JIT_WALL_TIME = 2,
+    CU_JIT_INFO_LOG_BUFFER = 3,
+    CU_JIT_INFO_LOG_BUFFER_SIZE_BYTES = 4,
+    CU_JIT_ERROR_LOG_BUFFER = 5,
+    CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES = 6,
+    CU_JIT_OPTIMIZATION_LEVEL = 7,
+    CU_JIT_TARGET_FROM_CUCONTEXT = 8,
+    CU_JIT_TARGET = 9,
+    CU_JIT_FALLBACK_STRATEGY = 10,
+    CU_JIT_GENERATE_DEBUG_INFO = 11,
+    CU_JIT_LOG_VERBOSE = 12,
+    CU_JIT_GENERATE_LINE_INFO = 13,
+    CU_JIT_CACHE_MODE = 14,
+    CU_JIT_NEW_SM3X_OPT = 15,
+    CU_JIT_FAST_COMPILE = 16,
+    CU_JIT_GLOBAL_SYMBOL_NAMES = 17,
+    CU_JIT_GLOBAL_SYMBOL_ADDRESSES = 18,
+    CU_JIT_GLOBAL_SYMBOL_COUNT = 19,
+    CU_JIT_NUM_OPTIONS = 20,
+}
+
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum CUdevice_attribute {
+    CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK = 1,
+    CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_X = 2,
+    CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Y = 3,
+    CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Z = 4,
+    CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X = 5,
+    CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_Y = 6,
+    CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_Z = 7,
+    CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK = 8,
+    CU_DEVICE_ATTRIBUTE_TOTAL_CONSTANT_MEMORY = 9,
+    CU_DEVICE_ATTRIBUTE_WARP_SIZE = 10,
+    CU_DEVICE_ATTRIBUTE_MAX_PITCH = 11,
+    CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_BLOCK = 12,
+    CU_DEVICE_ATTRIBUTE_CLOCK_RATE = 13,
+    CU_DEVICE_ATTRIBUTE_TEXTURE_ALIGNMENT = 14,
+    CU_DEVICE_ATTRIBUTE_GPU_OVERLAP = 15,
+    CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT = 16,
+    CU_DEVICE_ATTRIBUTE_KERNEL_EXEC_TIMEOUT = 17,
+    CU_DEVICE_ATTRIBUTE_INTEGRATED = 18,
+    CU_DEVICE_ATTRIBUTE_CAN_MAP_HOST_MEMORY = 19,
+    CU_DEVICE_ATTRIBUTE_COMPUTE_MODE = 20,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_WIDTH = 21,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_WIDTH = 22,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_HEIGHT = 23,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_WIDTH = 24,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_HEIGHT = 25,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_DEPTH = 26,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LAYERED_WIDTH = 27,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LAYERED_HEIGHT = 28,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LAYERED_LAYERS = 29,
+    CU_DEVICE_ATTRIBUTE_SURFACE_ALIGNMENT = 30,
+    CU_DEVICE_ATTRIBUTE_CONCURRENT_KERNELS = 31,
+    CU_DEVICE_ATTRIBUTE_ECC_ENABLED = 32,
+    CU_DEVICE_ATTRIBUTE_PCI_BUS_ID = 33,
+    CU_DEVICE_ATTRIBUTE_PCI_DEVICE_ID = 34,
+    CU_DEVICE_ATTRIBUTE_TCC_DRIVER = 35,
+    CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE = 36,
+    CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH = 37,
+    CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE = 38,
+    CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR = 39,
+    CU_DEVICE_ATTRIBUTE_ASYNC_ENGINE_COUNT = 40,
+    CU_DEVICE_ATTRIBUTE_UNIFIED_ADDRESSING = 41,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_LAYERED_WIDTH = 42,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_LAYERED_LAYERS = 43,
+    CU_DEVICE_ATTRIBUTE_CAN_TEX2D_GATHER = 44,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_GATHER_WIDTH = 45,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_GATHER_HEIGHT = 46,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_WIDTH_ALTERNATE = 47,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_HEIGHT_ALTERNATE = 48,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_DEPTH_ALTERNATE = 49,
+    CU_DEVICE_ATTRIBUTE_PCI_DOMAIN_ID = 50,
+    CU_DEVICE_ATTRIBUTE_TEXTURE_PITCH_ALIGNMENT = 51,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURECUBEMAP_WIDTH = 52,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURECUBEMAP_LAYERED_WIDTH = 53,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURECUBEMAP_LAYERED_LAYERS = 54,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE1D_WIDTH = 55,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_WIDTH = 56,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_HEIGHT = 57,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE3D_WIDTH = 58,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE3D_HEIGHT = 59,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE3D_DEPTH = 60,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE1D_LAYERED_WIDTH = 61,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE1D_LAYERED_LAYERS = 62,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_LAYERED_WIDTH = 63,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_LAYERED_HEIGHT = 64,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_LAYERED_LAYERS = 65,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACECUBEMAP_WIDTH = 66,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACECUBEMAP_LAYERED_WIDTH = 67,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACECUBEMAP_LAYERED_LAYERS = 68,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_LINEAR_WIDTH = 69,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LINEAR_WIDTH = 70,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LINEAR_HEIGHT = 71,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LINEAR_PITCH = 72,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_MIPMAPPED_WIDTH = 73,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_MIPMAPPED_HEIGHT = 74,
+    CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR = 75,
+    CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR = 76,
+    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_MIPMAPPED_WIDTH = 77,
+    CU_DEVICE_ATTRIBUTE_STREAM_PRIORITIES_SUPPORTED = 78,
+    CU_DEVICE_ATTRIBUTE_GLOBAL_L1_CACHE_SUPPORTED = 79,
+    CU_DEVICE_ATTRIBUTE_LOCAL_L1_CACHE_SUPPORTED = 80,
+    CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR = 81,
+    CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_MULTIPROCESSOR = 82,
+    CU_DEVICE_ATTRIBUTE_MANAGED_MEMORY = 83,
+    CU_DEVICE_ATTRIBUTE_MULTI_GPU_BOARD = 84,
+    CU_DEVICE_ATTRIBUTE_MULTI_GPU_BOARD_GROUP_ID = 85,
+    CU_DEVICE_ATTRIBUTE_HOST_NATIVE_ATOMIC_SUPPORTED = 86,
+    CU_DEVICE_ATTRIBUTE_SINGLE_TO_DOUBLE_PRECISION_PERF_RATIO = 87,
+    CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS = 88,
+    CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS = 89,
+    CU_DEVICE_ATTRIBUTE_COMPUTE_PREEMPTION_SUPPORTED = 90,
+    CU_DEVICE_ATTRIBUTE_CAN_USE_HOST_POINTER_FOR_REGISTERED_MEM = 91,
+    CU_DEVICE_ATTRIBUTE_CAN_USE_STREAM_MEM_OPS = 92,
+    CU_DEVICE_ATTRIBUTE_CAN_USE_64_BIT_STREAM_MEM_OPS = 93,
+    CU_DEVICE_ATTRIBUTE_CAN_USE_STREAM_WAIT_VALUE_NOR = 94,
+    CU_DEVICE_ATTRIBUTE_COOPERATIVE_LAUNCH = 95,
+    CU_DEVICE_ATTRIBUTE_COOPERATIVE_MULTI_DEVICE_LAUNCH = 96,
+    CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN = 97,
+    CU_DEVICE_ATTRIBUTE_CAN_FLUSH_REMOTE_WRITES = 98,
+    CU_DEVICE_ATTRIBUTE_HOST_REGISTER_SUPPORTED = 99,
+    CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS_USES_HOST_PAGE_TABLES = 100,
+    CU_DEVICE_ATTRIBUTE_DIRECT_MANAGED_MEM_ACCESS_FROM_HOST = 101,
+    CU_DEVICE_ATTRIBUTE_MAX = 102,
+}
 
 #[derive(Fail, Debug, From)]
 pub enum Error{
@@ -55,16 +225,16 @@ macro_rules! cuda {
 impl From<CUresult> for Result<()> {
     fn from(result: CUresult) -> Self {
         match result {
-            CUresult::CUDA_SUCCESS => Ok(()),
+            CUDA_SUCCESS => Ok(()),
             _ => {
                 let mut name_ptr: *const c_char = ptr::null();
                 let res = cuda!(cuGetErrorName(result, &mut name_ptr));
-                if res != CUresult::CUDA_SUCCESS {
+                if res != CUDA_SUCCESS {
                     return Err(Error::CudaError("Unknown CudaDriver Error".to_string()));
                 }
                 let mut descr_ptr: *const c_char = ptr::null();
                 let res = cuda!(cuGetErrorString(result, &mut descr_ptr));
-                if res != CUresult::CUDA_SUCCESS {
+                if res != CUDA_SUCCESS {
                     return Err(Error::CudaError("Unknown CudaDriver Error".to_string()));
                 }
                 let err_name = unsafe { CStr::from_ptr(name_ptr) };
@@ -316,7 +486,7 @@ impl CudaDevicePtr {
     pub fn transfer_to_device<T: Copy>(&self, src: &[T], stream: &CudaStream) -> Result<()> {
         let bytesize = src.len() * std::mem::size_of::<T>();
         if bytesize > self.capacity {
-            panic!("Programmer Error: trying to transfer more memory than was allocated")
+            panic!("Programmer Error: trying to transfer more memory({}) than was allocated({})", bytesize, self.capacity)
         } else {
             cuda!(@safe cuMemcpyHtoDAsync_v2(self.ptr, src.as_ptr() as *const c_void, bytesize, stream.stream))
         }
@@ -325,7 +495,7 @@ impl CudaDevicePtr {
     pub fn transfer_from_device<T: Copy>(&self, dst: &mut [T], stream: &CudaStream) -> Result<()> {
         let bytesize = dst.len() * std::mem::size_of::<T>();
         if bytesize > self.capacity {
-            panic!("Programmer Error: trying to transfer more memory than was allocated")
+            panic!("Programmer Error: trying to transfer more memory({}) than was allocated({})", bytesize, self.capacity)
         } else {
             cuda!(@safe cuMemcpyDtoHAsync_v2(dst.as_mut_ptr() as *mut c_void, self.ptr, bytesize, stream.stream))
         }
@@ -385,8 +555,8 @@ impl CudaEvent {
 
     pub fn is_finished(&self) -> Result<bool> {
         match cuda!(cuEventQuery(self.event)) {
-            CUresult::CUDA_SUCCESS => Ok(true),
-            CUresult::CUDA_ERROR_NOT_READY => Ok(false),
+            CUDA_SUCCESS => Ok(true),
+            CUDA_ERROR_NOT_READY => Ok(false),
             r => Result::from(r).map(|_| false)
         }
     }
