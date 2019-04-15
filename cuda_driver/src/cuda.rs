@@ -7,12 +7,10 @@ use dlopen::{
 #[cfg(feature = "dynamic")]
 use dlopen_derive::WrapperApi;
 #[cfg(feature = "dynamic")]
-use lazy_static::lazy_static;
+use once_cell::sync::OnceCell;
 use std::ffi::{CStr, FromBytesWithNulError};
 use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::ptr;
-#[cfg(feature = "dynamic")]
-use std::sync::RwLock;
 
 #[repr(transparent)]
 #[derive(From, PartialEq, Eq, Clone, Copy)]
@@ -205,18 +203,14 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(feature = "dynamic")]
-lazy_static! {
-    static ref DRIVER: RwLock<Option<Container<CudaDriverDyLib>>> = RwLock::new(None);
-}
+static DRIVER: OnceCell<Container<CudaDriverDyLib>> = OnceCell::INIT;
 
 macro_rules! cuda {
     ($func:ident($($arg:expr),*)) => {
     {
         #[cfg(feature = "dynamic")] {
-        DRIVER.try_read().map(|driver_opt| {
-            let driver = driver_opt.as_ref().expect("Driver called before initialization");
+            let driver = DRIVER.get().expect("Driver called before initialization");
             unsafe { driver.$func( $($arg, )* ) }
-        }).unwrap()
         } #[cfg(not(feature = "dynamic"))] {
             unsafe { $func( $($arg, )* ) }
         }
@@ -369,8 +363,7 @@ impl CudaDriver {
         #[cfg(not(windows))]
         let default = platform_file_name("cuda");
         let libcuda_path = libcuda_path.unwrap_or(&default);
-        let lib: Container<CudaDriverDyLib> = unsafe { Container::load(libcuda_path) }?;
-        *DRIVER.try_write().unwrap() = Some(lib);
+        drop(DRIVER.set(unsafe { Container::load(libcuda_path) }?));
         cuda!(@safe cuInit(0))
     }
 

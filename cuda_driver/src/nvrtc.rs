@@ -6,11 +6,9 @@ use dlopen::{
 #[cfg(feature = "dynamic")]
 use dlopen_derive::WrapperApi;
 #[cfg(feature = "dynamic")]
-use lazy_static::lazy_static;
+use once_cell::sync::OnceCell;
 use std::ffi::{CStr, CString, FromBytesWithNulError};
 use std::os::raw::{c_char, c_int, c_void};
-#[cfg(feature = "dynamic")]
-use std::sync::RwLock;
 
 use crate::lib_defn;
 
@@ -34,17 +32,13 @@ type nvrtcProgram = *mut c_void;
 const NVRTC_SUCCESS: nvrtcResult = nvrtcResult(0);
 
 #[cfg(feature = "dynamic")]
-lazy_static! {
-    static ref NVRTC: RwLock<Option<Container<NvrtcDylib>>> = RwLock::new(None);
-}
+static NVRTC: OnceCell<Container<NvrtcDylib>> = OnceCell::INIT;
 
 macro_rules! nvrtc {
     ($func:ident($($arg:expr),*)) => { {
         #[cfg(feature = "dynamic")] {
-             NVRTC.try_read().map(|driver_opt| {
-             let driver = driver_opt.as_ref().expect("Nvrtc called before initialization");
-                unsafe { driver.$func( $($arg, )* ) }
-            }).unwrap()
+            let driver = NVRTC.get().expect("Nvrtc called before initialization");
+            unsafe { driver.$func( $($arg, )* ) }
         } #[cfg(not(feature = "dynamic"))] {
             unsafe { $func( $($arg, )* ) }
         }
@@ -112,8 +106,7 @@ impl Nvrtc {
             }
             _ => platform_file_name("nvrtc"),
         };
-        let lib: Container<NvrtcDylib> = unsafe { Container::load(path) }?;
-        *NVRTC.try_write().unwrap() = Some(lib);
+        drop(NVRTC.set(unsafe { Container::load(path) }?));
         Ok(())
     }
 
