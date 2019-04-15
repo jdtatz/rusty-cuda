@@ -93,7 +93,7 @@ lib_defn! { "nvrtc", NvrtcDylib, {
     nvrtcGetPTX: fn(prog: nvrtcProgram, ptx: *mut c_char) -> nvrtcResult,
     nvrtcGetPTXSize: fn(prog: nvrtcProgram, ptx_size: *mut usize) -> nvrtcResult,
     nvrtcGetProgramLog: fn(prog: nvrtcProgram, log: *mut c_char) -> nvrtcResult,
-    nvrtcGetProgramLogSize: fn(prog: nvrtcProgram, log_size: *mut usize) -> nvrtcResult,
+    nvrtcGetProgramLogSize: fn(prog: nvrtcProgram, log_size: *mut usize) -> nvrtcResult
 }
 }
 
