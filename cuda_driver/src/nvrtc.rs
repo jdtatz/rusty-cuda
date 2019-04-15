@@ -1,15 +1,24 @@
+#[cfg(feature = "dynamic")]
 use dlopen::{
     utils::platform_file_name,
     wrapper::{Container, WrapperApi},
 };
-use std::ffi::{CStr, CString, FromBytesWithNulError, OsStr};
+#[cfg(feature = "dynamic")]
+use dlopen_derive::WrapperApi;
+#[cfg(feature = "dynamic")]
+use lazy_static::lazy_static;
+use std::ffi::{CStr, CString, FromBytesWithNulError};
 use std::os::raw::{c_char, c_int, c_void};
+#[cfg(feature = "dynamic")]
 use std::sync::RwLock;
+
+use crate::lib_defn;
 
 #[derive(Fail, Debug, From)]
 pub enum Error {
     #[fail(display = "NVRTC Error: {}", _0)]
     NvrtcError(String),
+    #[cfg(feature = "dynamic")]
     #[fail(display = "NVRTC dynamic library error: {}", _0)]
     LibError(#[cause] dlopen::Error),
     #[fail(display = "Null error: {}", _0)]
@@ -24,17 +33,22 @@ struct nvrtcResult(u32);
 type nvrtcProgram = *mut c_void;
 const NVRTC_SUCCESS: nvrtcResult = nvrtcResult(0);
 
+#[cfg(feature = "dynamic")]
 lazy_static! {
     static ref NVRTC: RwLock<Option<Container<NvrtcDylib>>> = RwLock::new(None);
 }
 
 macro_rules! nvrtc {
-    ($func:ident($($arg:expr),*)) => {
-        NVRTC.try_read().map(|driver_opt| {
-            let driver = driver_opt.as_ref().expect("Nvrtc called before initialization");
-            unsafe { driver.$func( $($arg, )* ) }
-        }).unwrap()
-    };
+    ($func:ident($($arg:expr),*)) => { {
+        #[cfg(feature = "dynamic")] {
+             NVRTC.try_read().map(|driver_opt| {
+             let driver = driver_opt.as_ref().expect("Nvrtc called before initialization");
+                unsafe { driver.$func( $($arg, )* ) }
+            }).unwrap()
+        } #[cfg(not(feature = "dynamic"))] {
+            unsafe { $func( $($arg, )* ) }
+        }
+    }};
     (@safe $($func_call:tt)*) => {
         <Result<()> as From<nvrtcResult>>::from(nvrtc!($($func_call)*))
     };
@@ -54,18 +68,15 @@ impl From<nvrtcResult> for Result<()> {
     }
 }
 
-#[derive(WrapperApi)]
-struct NvrtcDylib {
-    nvrtcGetErrorString: unsafe extern "C" fn(result: nvrtcResult) -> *const c_char,
-    // nvrtcVersion: unsafe extern "C" fn(major: *mut c_int, minor: *mut c_int) -> nvrtcResult,
-    nvrtcAddNameExpression:
-        unsafe extern "C" fn(prog: nvrtcProgram, name: *const c_char) -> nvrtcResult,
-    nvrtcCompileProgram: unsafe extern "C" fn(
+lib_defn! { "nvrtc", NvrtcDylib, {
+    nvrtcGetErrorString: fn(result: nvrtcResult) -> *const c_char,
+    nvrtcAddNameExpression: fn(prog: nvrtcProgram, name: *const c_char) -> nvrtcResult,
+    nvrtcCompileProgram: fn(
         prog: nvrtcProgram,
         num_opts: c_int,
         opt: *const *const c_char,
     ) -> nvrtcResult,
-    nvrtcCreateProgram: unsafe extern "C" fn(
+    nvrtcCreateProgram: fn(
         prog: *mut nvrtcProgram,
         src: *const c_char,
         name: *const c_char,
@@ -73,23 +84,27 @@ struct NvrtcDylib {
         headers: *const *const c_char,
         include_names: *const *const c_char,
     ) -> nvrtcResult,
-    nvrtcDestroyProgram: unsafe extern "C" fn(prog: *mut nvrtcProgram) -> nvrtcResult,
-    nvrtcGetLoweredName: unsafe extern "C" fn(
+    nvrtcDestroyProgram: fn(prog: *mut nvrtcProgram) -> nvrtcResult,
+    nvrtcGetLoweredName: fn(
         prog: nvrtcProgram,
         name_expression: *const c_char,
         lowered_name: *mut *const c_char,
     ) -> nvrtcResult,
-    nvrtcGetPTX: unsafe extern "C" fn(prog: nvrtcProgram, ptx: *mut c_char) -> nvrtcResult,
-    nvrtcGetPTXSize: unsafe extern "C" fn(prog: nvrtcProgram, ptx_size: *mut usize) -> nvrtcResult,
-    nvrtcGetProgramLog: unsafe extern "C" fn(prog: nvrtcProgram, log: *mut c_char) -> nvrtcResult,
-    nvrtcGetProgramLogSize:
-        unsafe extern "C" fn(prog: nvrtcProgram, log_size: *mut usize) -> nvrtcResult,
+    nvrtcGetPTX: fn(prog: nvrtcProgram, ptx: *mut c_char) -> nvrtcResult,
+    nvrtcGetPTXSize: fn(prog: nvrtcProgram, ptx_size: *mut usize) -> nvrtcResult,
+    nvrtcGetProgramLog: fn(prog: nvrtcProgram, log: *mut c_char) -> nvrtcResult,
+    nvrtcGetProgramLogSize: fn(prog: nvrtcProgram, log_size: *mut usize) -> nvrtcResult,
+}
 }
 
 pub struct Nvrtc;
 
 impl Nvrtc {
-    pub fn init(libnvrtc_path: Option<&OsStr>, cuda_version: Option<(i32, i32)>) -> Result<()> {
+    #[cfg(feature = "dynamic")]
+    pub fn init(
+        libnvrtc_path: Option<&std::ffi::OsStr>,
+        cuda_version: Option<(i32, i32)>,
+    ) -> Result<()> {
         let path = match (libnvrtc_path, cuda_version) {
             (Some(p), _) => std::ffi::OsString::from(p),
             (_, Some((major, minor))) if cfg!(windows) => {

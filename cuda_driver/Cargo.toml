@@ -6,13 +6,14 @@ description = "Dynamic bindings for cuda driver"
 edition = '2018'
 
 [features]
-default = ["nvrtc"]
+default = []
 nvrtc = []
+dynamic = ["lazy_static", "dlopen", "dlopen_derive"]
 
 [dependencies]
 derive_more = "0.14"
 failure = "0.1"
 failure_derive = "0.1"
-lazy_static = "1.2"
-dlopen = "0.1"
-dlopen_derive = "0.1"
+lazy_static = { version = "1.2", optional = true }
+dlopen = { version = "0.1", optional = true }
+dlopen_derive = { version = "0.1", optional = true }
