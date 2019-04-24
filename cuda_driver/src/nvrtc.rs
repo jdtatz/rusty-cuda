@@ -1,11 +1,11 @@
-#[cfg(feature = "dynamic")]
+#[cfg(feature = "dynamic-nvrtc")]
 use dlopen::{
     utils::platform_file_name,
     wrapper::{Container, WrapperApi},
 };
-#[cfg(feature = "dynamic")]
+#[cfg(feature = "dynamic-nvrtc")]
 use dlopen_derive::WrapperApi;
-#[cfg(feature = "dynamic")]
+#[cfg(feature = "dynamic-nvrtc")]
 use once_cell::sync::OnceCell;
 use std::ffi::{CStr, CString, FromBytesWithNulError};
 use std::os::raw::{c_char, c_int, c_void};
@@ -16,7 +16,7 @@ use crate::lib_defn;
 pub enum Error {
     #[fail(display = "NVRTC Error: {}", _0)]
     NvrtcError(String),
-    #[cfg(feature = "dynamic")]
+    #[cfg(feature = "dynamic-nvrtc")]
     #[fail(display = "NVRTC dynamic library error: {}", _0)]
     LibError(#[cause] dlopen::Error),
     #[fail(display = "Null error: {}", _0)]
@@ -31,15 +31,15 @@ struct nvrtcResult(u32);
 type nvrtcProgram = *mut c_void;
 const NVRTC_SUCCESS: nvrtcResult = nvrtcResult(0);
 
-#[cfg(feature = "dynamic")]
+#[cfg(feature = "dynamic-nvrtc")]
 static NVRTC: OnceCell<Container<NvrtcDylib>> = OnceCell::INIT;
 
 macro_rules! nvrtc {
     ($func:ident($($arg:expr),*)) => { {
-        #[cfg(feature = "dynamic")] {
+        #[cfg(feature = "dynamic-nvrtc")] {
             let driver = NVRTC.get().expect("Nvrtc called before initialization");
             unsafe { driver.$func( $($arg, )* ) }
-        } #[cfg(not(feature = "dynamic"))] {
+        } #[cfg(not(feature = "dynamic-nvrtc"))] {
             unsafe { $func( $($arg, )* ) }
         }
     }};
@@ -62,7 +62,7 @@ impl From<nvrtcResult> for Result<()> {
     }
 }
 
-lib_defn! { "nvrtc", NvrtcDylib, {
+lib_defn! { "dynamic-nvrtc", "nvrtc", NvrtcDylib, {
     nvrtcGetErrorString: fn(result: nvrtcResult) -> *const c_char,
     nvrtcAddNameExpression: fn(prog: nvrtcProgram, name: *const c_char) -> nvrtcResult,
     nvrtcCompileProgram: fn(
@@ -94,7 +94,7 @@ lib_defn! { "nvrtc", NvrtcDylib, {
 pub struct Nvrtc;
 
 impl Nvrtc {
-    #[cfg(feature = "dynamic")]
+    #[cfg(feature = "dynamic-nvrtc")]
     pub fn init(
         libnvrtc_path: Option<&std::ffi::OsStr>,
         cuda_version: Option<(i32, i32)>,

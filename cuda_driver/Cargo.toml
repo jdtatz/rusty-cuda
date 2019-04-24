@@ -8,7 +8,9 @@ edition = '2018'
 [features]
 default = []
 nvrtc = []
-dynamic = ["once_cell", "dlopen", "dlopen_derive"]
+dynamic = ["dynamic-cuda", "dynamic-nvrtc"]
+dynamic-cuda = ["once_cell", "dlopen", "dlopen_derive"]
+dynamic-nvrtc = ["nvrtc", "once_cell", "dlopen", "dlopen_derive"]
 
 [dependencies]
 derive_more = "0.14"

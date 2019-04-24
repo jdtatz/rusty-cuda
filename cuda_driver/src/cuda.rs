@@ -1,12 +1,12 @@
 use crate::lib_defn;
-#[cfg(feature = "dynamic")]
+#[cfg(feature = "dynamic-cuda")]
 use dlopen::{
     utils::platform_file_name,
     wrapper::{Container, WrapperApi},
 };
-#[cfg(feature = "dynamic")]
+#[cfg(feature = "dynamic-cuda")]
 use dlopen_derive::WrapperApi;
-#[cfg(feature = "dynamic")]
+#[cfg(feature = "dynamic-cuda")]
 use once_cell::sync::OnceCell;
 use std::ffi::{CStr, FromBytesWithNulError};
 use std::os::raw::{c_char, c_int, c_uint, c_void};
@@ -193,7 +193,7 @@ pub enum CUdevice_attribute {
 pub enum Error {
     #[fail(display = "CUDA Driver Error: {}", _0)]
     CudaError(String),
-    #[cfg(feature = "dynamic")]
+    #[cfg(feature = "dynamic-cuda")]
     #[fail(display = "CUDA Driver dynamic library error: {}", _0)]
     LibError(#[cause] dlopen::Error),
     #[fail(display = "Null error: {}", _0)]
@@ -202,16 +202,16 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[cfg(feature = "dynamic")]
+#[cfg(feature = "dynamic-cuda")]
 static DRIVER: OnceCell<Container<CudaDriverDyLib>> = OnceCell::INIT;
 
 macro_rules! cuda {
     ($func:ident($($arg:expr),*)) => {
     {
-        #[cfg(feature = "dynamic")] {
+        #[cfg(feature = "dynamic-cuda")] {
             let driver = DRIVER.get().expect("Driver called before initialization");
             unsafe { driver.$func( $($arg, )* ) }
-        } #[cfg(not(feature = "dynamic"))] {
+        } #[cfg(not(feature = "dynamic-cuda"))] {
             unsafe { $func( $($arg, )* ) }
         }
     }
@@ -266,7 +266,7 @@ macro_rules! device_copyable {
 
 device_copyable!(i8 u8 i16 u16 i32 u32 i64 u64 f32 f64);
 
-lib_defn! {"cuda", CudaDriverDyLib, {
+lib_defn! {"dynamic-cuda", "cuda", CudaDriverDyLib, {
     cuGetErrorName: fn(err: CUresult, pStr: *mut *const c_char) -> CUresult,
     cuGetErrorString: fn(err: CUresult, pStr: *mut *const c_char) -> CUresult,
     cuInit: fn(flags: c_uint) -> CUresult,
@@ -356,7 +356,7 @@ lib_defn! {"cuda", CudaDriverDyLib, {
 pub struct CudaDriver;
 
 impl CudaDriver {
-    #[cfg(feature = "dynamic")]
+    #[cfg(feature = "dynamic-cuda")]
     pub fn init(libcuda_path: Option<&std::ffi::OsStr>) -> Result<()> {
         #[cfg(windows)]
         let default = platform_file_name("nvcuda");
@@ -367,7 +367,7 @@ impl CudaDriver {
         cuda!(@safe cuInit(0))
     }
 
-    #[cfg(not(feature = "dynamic"))]
+    #[cfg(not(feature = "dynamic-cuda"))]
     pub fn init() -> Result<()> {
         cuda!(@safe cuInit(0))
     }
