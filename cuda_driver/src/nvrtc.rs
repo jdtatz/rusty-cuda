@@ -95,17 +95,30 @@ pub struct Nvrtc;
 
 impl Nvrtc {
     #[cfg(feature = "dynamic-nvrtc")]
-    pub fn init(
-        libnvrtc_path: Option<&std::ffi::OsStr>,
-        cuda_version: Option<(i32, i32)>,
-    ) -> Result<()> {
-        let path = match (libnvrtc_path, cuda_version) {
-            (Some(p), _) => std::ffi::OsString::from(p),
-            (_, Some((major, minor))) if cfg!(windows) => {
-                platform_file_name(format!("nvrtc64_{}{}", major, minor))
-            }
-            _ => platform_file_name("nvrtc"),
-        };
+    pub fn init(libnvrtc_path: Option<&std::ffi::OsStr>) -> Result<()> {
+        let path = libnvrtc_path
+            .map(std::ffi::OsString::from)
+            .or_else(|| {
+                let cuda_path = std::path::PathBuf::from(std::env::var_os("CUDA_PATH")?);
+                if cfg!(windows) {
+                    for entry in cuda_path.join("bin").read_dir().ok()? {
+                        if let Ok(entry) = entry {
+                            let path = entry.path();
+                            if path.is_file() &&
+                                path.extension().map_or_else(|| false, |ext| ext == "dll") &&
+                                path.file_stem().map_or_else(|| false, |stem| stem.to_string_lossy().starts_with("nvrtc64_")) {
+                                return Some(path.into_os_string());
+                            }
+                        }
+                    }
+                    None
+                } else if cfg!(target_os = "macos") {
+                    Some(cuda_path.join("lib").join(platform_file_name("nvrtc")).into_os_string())
+                } else {
+                    Some(cuda_path.join("lib64").join(platform_file_name("nvrtc")).into_os_string())
+                }
+            })
+            .unwrap_or_else(|| platform_file_name("nvrtc"));
         drop(NVRTC.set(unsafe { Container::load(path) }?));
         Ok(())
     }
