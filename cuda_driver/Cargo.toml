@@ -14,8 +14,6 @@ dynamic-nvrtc = ["nvrtc", "once_cell", "dlopen", "dlopen_derive"]
 
 [dependencies]
 derive_more = "0.14"
-failure = "0.1"
-failure_derive = "0.1"
 once_cell = { version = "0.1.8", optional = true, default-features=false }
 dlopen = { version = "0.1", optional = true }
 dlopen_derive = { version = "0.1", optional = true }

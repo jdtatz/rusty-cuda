@@ -189,15 +189,26 @@ pub enum CUdevice_attribute {
     CU_DEVICE_ATTRIBUTE_MAX = 102,
 }
 
-#[derive(Fail, Debug, From)]
+#[derive(Debug, Display, From)]
 pub enum Error {
-    #[fail(display = "CUDA Driver Error: {}", _0)]
+    #[display(fmt = "CUDA Driver Error: {}", _0)]
     CudaError(String),
     #[cfg(feature = "dynamic-cuda")]
-    #[fail(display = "CUDA Driver dynamic library error: {}", _0)]
-    LibError(#[cause] dlopen::Error),
-    #[fail(display = "Null error: {}", _0)]
-    NullError(#[cause] FromBytesWithNulError),
+    #[display(fmt = "CUDA Driver dynamic library error: {}", _0)]
+    LibError( dlopen::Error),
+    #[display(fmt = "Null error: {}", _0)]
+    NullError( FromBytesWithNulError),
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::CudaError(_) => None,
+            #[cfg(feature = "dynamic-cuda")]
+            Error::LibError(e) => Some(e),
+            Error::NullError(e) => Some(e),
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

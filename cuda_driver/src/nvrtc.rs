@@ -12,15 +12,26 @@ use std::os::raw::{c_char, c_int, c_void};
 
 use crate::lib_defn;
 
-#[derive(Fail, Debug, From)]
+#[derive(Debug, Display, From)]
 pub enum Error {
-    #[fail(display = "NVRTC Error: {}", _0)]
+    #[display(fmt = "NVRTC Error: {}", _0)]
     NvrtcError(String),
     #[cfg(feature = "dynamic-nvrtc")]
-    #[fail(display = "NVRTC dynamic library error: {}", _0)]
-    LibError(#[cause] dlopen::Error),
-    #[fail(display = "Null error: {}", _0)]
-    NullError(#[cause] FromBytesWithNulError),
+    #[display(fmt = "NVRTC dynamic library error: {}", _0)]
+    LibError(dlopen::Error),
+    #[display(fmt = "Null error: {}", _0)]
+    NullError(FromBytesWithNulError),
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::NvrtcError(_) => None,
+            #[cfg(feature = "dynamic-nvrtc")]
+            Error::LibError(e) => Some(e),
+            Error::NullError(e) => Some(e),
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -5,8 +5,6 @@
 #![allow(clippy::too_many_arguments)]
 
 #[macro_use]
-extern crate failure_derive;
-#[macro_use]
 extern crate derive_more;
 
 #[macro_use]
