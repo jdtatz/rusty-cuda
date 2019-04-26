@@ -175,12 +175,10 @@ impl Nvrtc {
         let name = unsafe { CStr::from_ptr(lname) }.to_owned();
         let mut ptx_size = 0;
         nvrtc!(@safe nvrtcGetPTXSize(prog, &mut ptx_size as *mut _))?;
-        let mut ptx = Vec::new();
-        ptx.resize(ptx_size, 0u8);
+        let mut ptx = vec![0_u8; ptx_size];
         nvrtc!(@safe nvrtcGetPTX(prog, ptx.as_mut_ptr() as *mut _))?;
-        // Only way to convert a Vec<u8> to a CString without additional allocations
         let _nul = ptx.pop();
-        let ptx = unsafe { CString::from_vec_unchecked(ptx) };
+        let ptx = CString::new(ptx).expect("NVRTC return invalid ptx");
         nvrtc!(@safe nvrtcDestroyProgram(&mut prog as *mut _))?;
         Ok((name, ptx))
     }

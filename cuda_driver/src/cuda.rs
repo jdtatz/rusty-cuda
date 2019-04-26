@@ -8,7 +8,7 @@ use dlopen::{
 use dlopen_derive::WrapperApi;
 #[cfg(feature = "dynamic-cuda")]
 use once_cell::sync::OnceCell;
-use std::ffi::{CStr, FromBytesWithNulError};
+use std::ffi::{CString, CStr, FromBytesWithNulError};
 use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::ptr;
 
@@ -426,11 +426,13 @@ pub struct CudaDevice {
 }
 
 impl CudaDevice {
-    pub fn name(&self, name_len: usize) -> Result<String> {
-        let mut buffer = Vec::<u8>::new();
-        buffer.resize(name_len, 0);
-        cuda!(@safe cuDeviceGetName(buffer.as_mut_ptr() as *mut _, name_len as i32, self.device))?;
-        Ok(String::from_utf8_lossy(&buffer).to_string())
+    pub fn name(&self) -> Result<CString> {
+        let mut buffer = vec![0_u8; 64];
+        cuda!(@safe cuDeviceGetName(buffer.as_mut_ptr() as * mut c_char, 64, self.device))?;
+        if let Some(len) = buffer.iter().position(|c| *c == 0) {
+            buffer.truncate(len)
+        }
+        Ok(CString::new(buffer).expect("cuDeviceGetName gave invalid string"))
     }
 
     pub fn get_attr(&self, attrib: CUdevice_attribute) -> Result<i32> {
