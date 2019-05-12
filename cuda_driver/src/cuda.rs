@@ -8,7 +8,7 @@ use dlopen::{
 use dlopen_derive::WrapperApi;
 #[cfg(feature = "dynamic-cuda")]
 use once_cell::sync::OnceCell;
-use std::ffi::{CString, CStr, FromBytesWithNulError};
+use std::ffi::{CStr, CString, FromBytesWithNulError};
 use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::ptr;
 
@@ -195,9 +195,9 @@ pub enum Error {
     CudaError(String),
     #[cfg(feature = "dynamic-cuda")]
     #[display(fmt = "CUDA Driver dynamic library error: {}", _0)]
-    LibError( dlopen::Error),
+    LibError(dlopen::Error),
     #[display(fmt = "Null error: {}", _0)]
-    NullError( FromBytesWithNulError),
+    NullError(FromBytesWithNulError),
 }
 
 impl std::error::Error for Error {
@@ -364,61 +364,57 @@ lib_defn! {"dynamic-cuda", "cuda", CudaDriverDyLib, {
 }
 }
 
-pub struct CudaDriver;
+#[cfg(feature = "dynamic-cuda")]
+pub fn init(libcuda_path: Option<&std::ffi::OsStr>) -> Result<()> {
+    #[cfg(windows)]
+    let default = platform_file_name("nvcuda");
+    #[cfg(not(windows))]
+    let default = platform_file_name("cuda");
+    let libcuda_path = libcuda_path.unwrap_or(&default);
+    drop(DRIVER.set(unsafe { Container::load(libcuda_path) }?));
+    cuda!(@safe cuInit(0))
+}
 
-impl CudaDriver {
-    #[cfg(feature = "dynamic-cuda")]
-    pub fn init(libcuda_path: Option<&std::ffi::OsStr>) -> Result<()> {
-        #[cfg(windows)]
-        let default = platform_file_name("nvcuda");
-        #[cfg(not(windows))]
-        let default = platform_file_name("cuda");
-        let libcuda_path = libcuda_path.unwrap_or(&default);
-        drop(DRIVER.set(unsafe { Container::load(libcuda_path) }?));
-        cuda!(@safe cuInit(0))
-    }
+#[cfg(not(feature = "dynamic-cuda"))]
+pub fn init() -> Result<()> {
+    cuda!(@safe cuInit(0))
+}
 
-    #[cfg(not(feature = "dynamic-cuda"))]
-    pub fn init() -> Result<()> {
-        cuda!(@safe cuInit(0))
-    }
+pub fn get_device(id: i32) -> Result<CudaDevice> {
+    let mut device = 0;
+    cuda!(@safe cuDeviceGet(&mut device as *mut _, id))?;
+    Ok(CudaDevice { device })
+}
 
-    pub fn get_device(id: i32) -> Result<CudaDevice> {
-        let mut device = 0;
-        cuda!(@safe cuDeviceGet(&mut device as *mut _, id))?;
-        Ok(CudaDevice { device })
-    }
+pub fn device_count() -> Result<i32> {
+    let mut count = 0;
+    cuda!(@safe cuDeviceGetCount(&mut count))?;
+    Ok(count)
+}
 
-    pub fn device_count() -> Result<i32> {
-        let mut count = 0;
-        cuda!(@safe cuDeviceGetCount(&mut count))?;
-        Ok(count)
-    }
+pub fn version() -> Result<(i32, i32)> {
+    let mut ver = 0;
+    cuda!(@safe cuDriverGetVersion(&mut ver as *mut _))?;
+    let (major, minor) = (ver / 1000, ver % 1000 / 10);
+    Ok((major, minor))
+}
 
-    pub fn version() -> Result<(i32, i32)> {
-        let mut ver = 0;
-        cuda!(@safe cuDriverGetVersion(&mut ver as *mut _))?;
-        let (major, minor) = (ver / 1000, ver % 1000 / 10);
-        Ok((major, minor))
+pub fn get_current_context() -> Result<Option<CudaContext>> {
+    let mut context = std::ptr::null_mut();
+    cuda!(@safe cuCtxGetCurrent(&mut context))?;
+    if context.is_null() {
+        Ok(None)
+    } else {
+        Ok(Some(CudaContext { context }))
     }
+}
 
-    pub fn get_current_context() -> Result<Option<CudaContext>> {
-        let mut context = std::ptr::null_mut();
-        cuda!(@safe cuCtxGetCurrent(&mut context))?;
-        if context.is_null() {
-            Ok(None)
-        } else {
-            Ok(Some(CudaContext { context }))
-        }
-    }
+pub unsafe fn register_pinned(ptr: *const c_void, bytesize: usize) -> Result<()> {
+    cuda!(@safe cuMemHostRegister_v2(ptr, bytesize, 0x1))
+}
 
-    pub unsafe fn register_pinned(ptr: *const c_void, bytesize: usize) -> Result<()> {
-        cuda!(@safe cuMemHostRegister_v2(ptr, bytesize, 0x1))
-    }
-
-    pub unsafe fn unregister_pinned(ptr: *const c_void) -> Result<()> {
-        cuda!(@safe cuMemHostUnregister(ptr))
-    }
+pub unsafe fn unregister_pinned(ptr: *const c_void) -> Result<()> {
+    cuda!(@safe cuMemHostUnregister(ptr))
 }
 
 pub struct CudaDevice {

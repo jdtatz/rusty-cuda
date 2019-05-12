@@ -102,84 +102,96 @@ lib_defn! { "dynamic-nvrtc", "nvrtc", NvrtcDylib, {
 }
 }
 
-pub struct Nvrtc;
-
-impl Nvrtc {
-    #[cfg(feature = "dynamic-nvrtc")]
-    pub fn init(libnvrtc_path: Option<&std::ffi::OsStr>) -> Result<()> {
-        let path = libnvrtc_path
-            .map(std::ffi::OsString::from)
-            .or_else(|| {
-                let cuda_path = std::path::PathBuf::from(std::env::var_os("CUDA_PATH")?);
-                if cfg!(windows) {
-                    for entry in cuda_path.join("bin").read_dir().ok()? {
-                        if let Ok(entry) = entry {
-                            let path = entry.path();
-                            if path.is_file() &&
-                                path.extension().map_or_else(|| false, |ext| ext == "dll") &&
-                                path.file_stem().map_or_else(|| false, |stem| stem.to_string_lossy().starts_with("nvrtc64_")) {
-                                return Some(path.into_os_string());
-                            }
+#[cfg(feature = "dynamic-nvrtc")]
+pub fn init(libnvrtc_path: Option<&std::ffi::OsStr>) -> Result<()> {
+    let path = libnvrtc_path
+        .map(std::ffi::OsString::from)
+        .or_else(|| {
+            let cuda_path = std::path::PathBuf::from(std::env::var_os("CUDA_PATH")?);
+            if cfg!(windows) {
+                for entry in cuda_path.join("bin").read_dir().ok()? {
+                    if let Ok(entry) = entry {
+                        let path = entry.path();
+                        if path.is_file()
+                            && path.extension().map_or_else(|| false, |ext| ext == "dll")
+                            && path.file_stem().map_or_else(
+                                || false,
+                                |stem| stem.to_string_lossy().starts_with("nvrtc64_"),
+                            )
+                        {
+                            return Some(path.into_os_string());
                         }
                     }
-                    None
-                } else if cfg!(target_os = "macos") {
-                    Some(cuda_path.join("lib").join(platform_file_name("nvrtc")).into_os_string())
-                } else {
-                    Some(cuda_path.join("lib64").join(platform_file_name("nvrtc")).into_os_string())
                 }
-            })
-            .unwrap_or_else(|| platform_file_name("nvrtc"));
-        drop(NVRTC.set(unsafe { Container::load(path) }?));
-        Ok(())
-    }
+                None
+            } else if cfg!(target_os = "macos") {
+                Some(
+                    cuda_path
+                        .join("lib")
+                        .join(platform_file_name("nvrtc"))
+                        .into_os_string(),
+                )
+            } else {
+                Some(
+                    cuda_path
+                        .join("lib64")
+                        .join(platform_file_name("nvrtc"))
+                        .into_os_string(),
+                )
+            }
+        })
+        .unwrap_or_else(|| platform_file_name("nvrtc"));
+    drop(NVRTC.set(unsafe { Container::load(path) }?));
+    Ok(())
+}
 
-    pub fn compile(
-        src: impl AsRef<[u8]>,
-        fname_expr: impl AsRef<[u8]>,
-        compile_opts: &[impl AsRef<[u8]>],
-        prog_name: impl AsRef<[u8]>,
-    ) -> Result<(CString, CString)> {
-        let mut prog = std::ptr::null_mut();
-        let src = CStr::from_bytes_with_nul(src.as_ref())?.as_ptr();
-        let prog_name = CStr::from_bytes_with_nul(prog_name.as_ref())?.as_ptr();
-        nvrtc!(@safe nvrtcCreateProgram(&mut prog as *mut _, src, prog_name, 0, std::ptr::null(), std::ptr::null()))?;
-        let fname_expr = CStr::from_bytes_with_nul(fname_expr.as_ref())?.as_ptr();
-        nvrtc!(@safe nvrtcAddNameExpression(prog, fname_expr))?;
-        let copts = compile_opts
-            .iter()
-            .map(|opt| {
-                CStr::from_bytes_with_nul(opt.as_ref())
-                    .map(CStr::as_ptr)
-                    .map_err(Error::NullError)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let result = nvrtc!(nvrtcCompileProgram(prog, copts.len() as _, copts.as_ptr()));
-        if result != NVRTC_SUCCESS {
-            let err_ptr = nvrtc!(nvrtcGetErrorString(result));
-            let err = unsafe { CStr::from_ptr(err_ptr) }.to_string_lossy();
-            let mut log_size = 0;
-            nvrtc!(@safe nvrtcGetProgramLogSize(prog, &mut log_size as *mut _))?;
-            let mut log = Vec::new();
-            log.resize(log_size, 0u8);
-            nvrtc!(@safe nvrtcGetProgramLog(prog, log.as_mut_ptr() as *mut _))?;
-            let log = CStr::from_bytes_with_nul(&log).unwrap().to_string_lossy();
-            nvrtc!(@safe nvrtcDestroyProgram(&mut prog as *mut _))?;
-            return Err(Error::NvrtcError(format!(
-                "Failed to compile program: {}\n{}",
-                err, log
-            )));
-        }
-        let mut lname = std::ptr::null_mut();
-        nvrtc!(@safe nvrtcGetLoweredName(prog, fname_expr, &mut lname as *mut _ as *mut _))?;
-        let name = unsafe { CStr::from_ptr(lname) }.to_owned();
-        let mut ptx_size = 0;
-        nvrtc!(@safe nvrtcGetPTXSize(prog, &mut ptx_size as *mut _))?;
-        let mut ptx = vec![0_u8; ptx_size];
-        nvrtc!(@safe nvrtcGetPTX(prog, ptx.as_mut_ptr() as *mut _))?;
-        let _nul = ptx.pop();
-        let ptx = CString::new(ptx).expect("NVRTC return invalid ptx");
+pub fn compile(
+    src: impl AsRef<[u8]>,
+    fname_expr: impl AsRef<[u8]>,
+    compile_opts: &[impl AsRef<[u8]>],
+    prog_name: impl AsRef<[u8]>,
+) -> Result<(CString, CString)> {
+    let mut prog = std::ptr::null_mut();
+    let src = CStr::from_bytes_with_nul(src.as_ref())?.as_ptr();
+    let prog_name = CStr::from_bytes_with_nul(prog_name.as_ref())?.as_ptr();
+    nvrtc!(@safe nvrtcCreateProgram(&mut prog as *mut _, src, prog_name, 0, std::ptr::null(), std::ptr::null()))?;
+    let fname_expr = CStr::from_bytes_with_nul(fname_expr.as_ref())?.as_ptr();
+    nvrtc!(@safe nvrtcAddNameExpression(prog, fname_expr))?;
+    let copts = compile_opts
+        .iter()
+        .map(|opt| {
+            CStr::from_bytes_with_nul(opt.as_ref())
+                .map(CStr::as_ptr)
+                .map_err(Error::NullError)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let result = nvrtc!(nvrtcCompileProgram(prog, copts.len() as _, copts.as_ptr()));
+    if result != NVRTC_SUCCESS {
+        let err_ptr = nvrtc!(nvrtcGetErrorString(result));
+        let err = unsafe { CStr::from_ptr(err_ptr) }.to_string_lossy();
+        let mut log_size = 0;
+        nvrtc!(@safe nvrtcGetProgramLogSize(prog, &mut log_size as *mut _))?;
+        let mut log = Vec::new();
+        log.resize(log_size, 0u8);
+        nvrtc!(@safe nvrtcGetProgramLog(prog, log.as_mut_ptr() as *mut _))?;
+        let log = CStr::from_bytes_with_nul(&log)
+            .expect("NVRTC returned invalid failure log")
+            .to_string_lossy();
         nvrtc!(@safe nvrtcDestroyProgram(&mut prog as *mut _))?;
-        Ok((name, ptx))
+        return Err(Error::NvrtcError(format!(
+            "Failed to compile program: {}\n{}",
+            err, log
+        )));
     }
+    let mut lname = std::ptr::null_mut();
+    nvrtc!(@safe nvrtcGetLoweredName(prog, fname_expr, &mut lname as *mut _ as *mut _))?;
+    let name = unsafe { CStr::from_ptr(lname) }.to_owned();
+    let mut ptx_size = 0;
+    nvrtc!(@safe nvrtcGetPTXSize(prog, &mut ptx_size as *mut _))?;
+    let mut ptx = vec![0_u8; ptx_size];
+    nvrtc!(@safe nvrtcGetPTX(prog, ptx.as_mut_ptr() as *mut _))?;
+    let _nul = ptx.pop();
+    let ptx = CString::new(ptx).expect("NVRTC return invalid ptx");
+    nvrtc!(@safe nvrtcDestroyProgram(&mut prog as *mut _))?;
+    Ok((name, ptx))
 }
