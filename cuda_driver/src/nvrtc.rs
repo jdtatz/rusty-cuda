@@ -7,20 +7,32 @@ use dlopen::{
 use dlopen_derive::WrapperApi;
 #[cfg(feature = "dynamic-nvrtc")]
 use once_cell::sync::OnceCell;
-use std::ffi::{CStr, CString, FromBytesWithNulError};
+use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
 
 use crate::lib_defn;
 
-#[derive(Debug, Display, From)]
+#[derive(Debug, Display)]
 pub enum Error {
     #[display(fmt = "NVRTC Error: {}", _0)]
     NvrtcError(String),
     #[cfg(feature = "dynamic-nvrtc")]
-    #[display(fmt = "NVRTC dynamic library error: {}", _0)]
-    LibError(dlopen::Error),
-    #[display(fmt = "Null error: {}", _0)]
-    NullError(FromBytesWithNulError),
+    #[display(fmt = "NVRTC dynamic library opening error(Ensure $CUDA_PATH is valid & accessible): {}", _0)]
+    LibOpenError(std::io::Error),
+    #[cfg(feature = "dynamic-nvrtc")]
+    #[display(fmt = "NVRTC dynamic library symbol getting error: {}", _0)]
+    LibSymbolError(std::io::Error),
+}
+
+#[cfg(feature = "dynamic-nvrtc")]
+impl From<dlopen::Error> for Error {
+    fn from(err: dlopen::Error) -> Self {
+        match err {
+            dlopen::Error::OpeningLibraryError(e) => Error::LibOpenError(e),
+            dlopen::Error::SymbolGettingError(e) => Error::LibSymbolError(e),
+            dlopen::Error::NullCharacter(_) | dlopen::Error::NullSymbol => unreachable!()
+        }
+    }
 }
 
 impl std::error::Error for Error {
@@ -28,8 +40,9 @@ impl std::error::Error for Error {
         match self {
             Error::NvrtcError(_) => None,
             #[cfg(feature = "dynamic-nvrtc")]
-            Error::LibError(e) => Some(e),
-            Error::NullError(e) => Some(e),
+            Error::LibOpenError(e) => Some(e),
+            #[cfg(feature = "dynamic-nvrtc")]
+            Error::LibSymbolError(e) => Some(e),
         }
     }
 }
@@ -146,25 +159,18 @@ pub fn init(libnvrtc_path: Option<&std::ffi::OsStr>) -> Result<()> {
 }
 
 pub fn compile(
-    src: impl AsRef<[u8]>,
-    fname_expr: impl AsRef<[u8]>,
-    compile_opts: &[impl AsRef<[u8]>],
-    prog_name: impl AsRef<[u8]>,
+    src: &CStr,
+    fname_expr: &CStr,
+    compile_opts: &[&CStr],
+    prog_name: &CStr,
 ) -> Result<(CString, CString)> {
     let mut prog = std::ptr::null_mut();
-    let src = CStr::from_bytes_with_nul(src.as_ref())?.as_ptr();
-    let prog_name = CStr::from_bytes_with_nul(prog_name.as_ref())?.as_ptr();
-    nvrtc!(@safe nvrtcCreateProgram(&mut prog as *mut _, src, prog_name, 0, std::ptr::null(), std::ptr::null()))?;
-    let fname_expr = CStr::from_bytes_with_nul(fname_expr.as_ref())?.as_ptr();
-    nvrtc!(@safe nvrtcAddNameExpression(prog, fname_expr))?;
+    nvrtc!(@safe nvrtcCreateProgram(&mut prog as *mut _, src.as_ptr(), prog_name.as_ptr(), 0, std::ptr::null(), std::ptr::null()))?;
+    nvrtc!(@safe nvrtcAddNameExpression(prog, fname_expr.as_ptr()))?;
     let copts = compile_opts
         .iter()
-        .map(|opt| {
-            CStr::from_bytes_with_nul(opt.as_ref())
-                .map(CStr::as_ptr)
-                .map_err(Error::NullError)
-        })
-        .collect::<Result<Vec<_>>>()?;
+        .map(|c| c.as_ptr())
+        .collect::<Vec<_>>();
     let result = nvrtc!(nvrtcCompileProgram(prog, copts.len() as _, copts.as_ptr()));
     if result != NVRTC_SUCCESS {
         let err_ptr = nvrtc!(nvrtcGetErrorString(result));
@@ -184,7 +190,7 @@ pub fn compile(
         )));
     }
     let mut lname = std::ptr::null_mut();
-    nvrtc!(@safe nvrtcGetLoweredName(prog, fname_expr, &mut lname as *mut _ as *mut _))?;
+    nvrtc!(@safe nvrtcGetLoweredName(prog, fname_expr.as_ptr(), &mut lname as *mut _ as *mut _))?;
     let name = unsafe { CStr::from_ptr(lname) }.to_owned();
     let mut ptx_size = 0;
     nvrtc!(@safe nvrtcGetPTXSize(prog, &mut ptx_size as *mut _))?;

@@ -8,7 +8,7 @@ use dlopen::{
 use dlopen_derive::WrapperApi;
 #[cfg(feature = "dynamic-cuda")]
 use once_cell::sync::OnceCell;
-use std::ffi::{CStr, CString, FromBytesWithNulError};
+use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::ptr;
 
@@ -189,24 +189,38 @@ pub enum CUdevice_attribute {
     CU_DEVICE_ATTRIBUTE_MAX = 102,
 }
 
-#[derive(Debug, Display, From)]
+#[derive(Debug, Display)]
 pub enum Error {
     #[display(fmt = "CUDA Driver Error: {}", _0)]
     CudaError(String),
     #[cfg(feature = "dynamic-cuda")]
-    #[display(fmt = "CUDA Driver dynamic library error: {}", _0)]
-    LibError(dlopen::Error),
-    #[display(fmt = "Null error: {}", _0)]
-    NullError(FromBytesWithNulError),
+    #[display(fmt = "CUDA dynamic library opening error: {}", _0)]
+    LibOpenError(std::io::Error),
+    #[cfg(feature = "dynamic-cuda")]
+    #[display(fmt = "CUDA dynamic library symbol getting error: {}", _0)]
+    LibSymbolError(std::io::Error),
 }
+
+#[cfg(feature = "dynamic-cuda")]
+impl From<dlopen::Error> for Error {
+    fn from(err: dlopen::Error) -> Self {
+        match err {
+            dlopen::Error::OpeningLibraryError(e) => Error::LibOpenError(e),
+            dlopen::Error::SymbolGettingError(e) => Error::LibSymbolError(e),
+            dlopen::Error::NullCharacter(_) | dlopen::Error::NullSymbol => unreachable!()
+        }
+    }
+}
+
 
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Error::CudaError(_) => None,
             #[cfg(feature = "dynamic-cuda")]
-            Error::LibError(e) => Some(e),
-            Error::NullError(e) => Some(e),
+            Error::LibOpenError(e) => Some(e),
+            #[cfg(feature = "dynamic-cuda")]
+            Error::LibSymbolError(e) => Some(e),
         }
     }
 }
@@ -465,7 +479,7 @@ impl CudaContext {
 
     pub fn create_module_opts(
         &self,
-        ptx: impl AsRef<[u8]>,
+        ptx: &CStr,
         opt_names: &mut [CUjit_option],
         opt_vals: &mut [*mut c_void],
     ) -> Result<CudaModule> {
@@ -474,9 +488,8 @@ impl CudaContext {
             opt_vals.len(),
             "The number of values must be equal to the number of names"
         );
-        let ptx = CStr::from_bytes_with_nul(ptx.as_ref())?.as_ptr();
         let mut module = std::ptr::null_mut();
-        cuda!(@safe cuModuleLoadDataEx(&mut module, ptx as *const _, opt_names.len() as _, opt_names.as_mut_ptr(), opt_vals.as_mut_ptr()))?;
+        cuda!(@safe cuModuleLoadDataEx(&mut module, ptx.as_ptr() as *const _, opt_names.len() as _, opt_names.as_mut_ptr(), opt_vals.as_mut_ptr()))?;
         Ok(CudaModule { module })
     }
 
@@ -518,18 +531,16 @@ pub struct CudaModule {
 }
 
 impl CudaModule {
-    pub fn get_function(&self, function_name: impl AsRef<[u8]>) -> Result<CudaFunction> {
-        let function_name = CStr::from_bytes_with_nul(function_name.as_ref())?.as_ptr();
+    pub fn get_function(&self, function_name: &CStr) -> Result<CudaFunction> {
         let mut function = std::ptr::null_mut();
-        cuda!(@safe cuModuleGetFunction(&mut function, self.module, function_name))?;
+        cuda!(@safe cuModuleGetFunction(&mut function, self.module, function_name.as_ptr()))?;
         Ok(CudaFunction { function })
     }
 
-    pub fn get_global(&self, global_name: impl AsRef<[u8]>) -> Result<CudaDevicePtr> {
-        let global_name = CStr::from_bytes_with_nul(global_name.as_ref())?.as_ptr();
+    pub fn get_global(&self, global_name: &CStr) -> Result<CudaDevicePtr> {
         let mut dptr = 0;
         let mut bytesize = 0;
-        cuda!(@safe cuModuleGetGlobal_v2(&mut dptr, &mut bytesize, self.module, global_name))?;
+        cuda!(@safe cuModuleGetGlobal_v2(&mut dptr, &mut bytesize, self.module, global_name.as_ptr()))?;
         Ok(CudaDevicePtr {
             ptr: dptr,
             capacity: bytesize,
