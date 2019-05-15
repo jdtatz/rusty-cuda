@@ -468,12 +468,9 @@ impl CudaContext {
         cuda!(@safe cuCtxSetCurrent(self.context))
     }
 
-    pub fn create_module(&self, ptx: impl AsRef<[u8]>) -> Result<CudaModule> {
-        let ptx = CStr::from_bytes_with_nul(ptx.as_ref())
-            .expect("Nul?")
-            .as_ptr();
+    pub fn create_module(&self, ptx: &CStr) -> Result<CudaModule> {
         let mut module = std::ptr::null_mut();
-        cuda!(@safe cuModuleLoadData(&mut module, ptx as *const _))?;
+        cuda!(@safe cuModuleLoadData(&mut module, ptx.as_ptr() as *const _))?;
         Ok(CudaModule { module })
     }
 
