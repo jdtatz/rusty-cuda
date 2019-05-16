@@ -228,7 +228,7 @@ impl std::error::Error for Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(feature = "dynamic-cuda")]
-static DRIVER: OnceCell<Container<CudaDriverDyLib>> = OnceCell::INIT;
+static DRIVER: OnceCell<Container<CudaDriverDyLib>> = OnceCell::new();
 
 macro_rules! cuda {
     ($func:ident($($arg:expr),*)) => {

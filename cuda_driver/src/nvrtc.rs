@@ -56,7 +56,7 @@ type nvrtcProgram = *mut c_void;
 const NVRTC_SUCCESS: nvrtcResult = nvrtcResult(0);
 
 #[cfg(feature = "dynamic-nvrtc")]
-static NVRTC: OnceCell<Container<NvrtcDylib>> = OnceCell::INIT;
+static NVRTC: OnceCell<Container<NvrtcDylib>> = OnceCell::new();
 
 macro_rules! nvrtc {
     ($func:ident($($arg:expr),*)) => { {
