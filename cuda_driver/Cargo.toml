@@ -1,6 +1,6 @@
 [package]
 name = "cuda-driver"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Julia Tatz <tatz.j@husky.neu.edu>"]
 description = "Dynamic bindings for cuda driver"
 edition = '2018'
@@ -13,7 +13,7 @@ dynamic-cuda = ["once_cell", "dlopen", "dlopen_derive"]
 dynamic-nvrtc = ["nvrtc", "once_cell", "dlopen", "dlopen_derive"]
 
 [dependencies]
-derive_more = "0.14"
-once_cell = { version = "0.2.0", optional = true }
+derive_more = "0.99"
+once_cell = { version = "1.4", optional = true }
 dlopen = { version = "0.1", optional = true }
 dlopen_derive = { version = "0.1", optional = true }

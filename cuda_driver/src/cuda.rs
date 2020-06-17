@@ -11,10 +11,12 @@ use once_cell::sync::OnceCell;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::ptr;
+#[cfg(feature = "dynamic-cuda")]
+use std::sync::Arc;
 
 #[repr(transparent)]
-#[derive(From, PartialEq, Eq, Clone, Copy)]
-struct CUresult(u32);
+#[derive(Debug, From, PartialEq, Eq, Clone, Copy)]
+pub struct CUresult(u32);
 type CUdevice = c_int;
 type CUdeviceptr = usize;
 type CUcontext = *mut c_void;
@@ -189,38 +191,40 @@ pub enum CUdevice_attribute {
     CU_DEVICE_ATTRIBUTE_MAX = 102,
 }
 
-#[derive(Debug, Display)]
+#[derive(Debug, Display, Clone)]
+#[cfg_attr(not(feature = "dynamic-cuda"), derive(Copy))]
 pub enum Error {
     #[display(fmt = "CUDA Driver Error: {}", _0)]
-    CudaError(String),
+    CudaError(CUresult),
     #[cfg(feature = "dynamic-cuda")]
     #[display(fmt = "CUDA dynamic library opening error: {}", _0)]
-    LibOpenError(std::io::Error),
+    LibOpenError(Arc<std::io::Error>),
     #[cfg(feature = "dynamic-cuda")]
     #[display(fmt = "CUDA dynamic library symbol getting error: {}", _0)]
-    LibSymbolError(std::io::Error),
+    LibSymbolError(Arc<std::io::Error>),
 }
 
 #[cfg(feature = "dynamic-cuda")]
 impl From<dlopen::Error> for Error {
     fn from(err: dlopen::Error) -> Self {
         match err {
-            dlopen::Error::OpeningLibraryError(e) => Error::LibOpenError(e),
-            dlopen::Error::SymbolGettingError(e) => Error::LibSymbolError(e),
-            dlopen::Error::NullCharacter(_) | dlopen::Error::NullSymbol => unreachable!()
+            dlopen::Error::OpeningLibraryError(e) => Error::LibOpenError(Arc::new(e)),
+            dlopen::Error::SymbolGettingError(e) => Error::LibSymbolError(Arc::new(e)),
+            dlopen::Error::AddrNotMatchingDll(_)
+            | dlopen::Error::NullCharacter(_)
+            | dlopen::Error::NullSymbol => unreachable!(),
         }
     }
 }
-
 
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Error::CudaError(_) => None,
             #[cfg(feature = "dynamic-cuda")]
-            Error::LibOpenError(e) => Some(e),
+            Error::LibOpenError(e) => Some(e.as_ref()),
             #[cfg(feature = "dynamic-cuda")]
-            Error::LibSymbolError(e) => Some(e),
+            Error::LibSymbolError(e) => Some(e.as_ref()),
         }
     }
 }
@@ -250,26 +254,29 @@ impl From<CUresult> for Result<()> {
     fn from(result: CUresult) -> Self {
         match result {
             CUDA_SUCCESS => Ok(()),
-            _ => {
-                let mut name_ptr: *const c_char = ptr::null();
-                let res = cuda!(cuGetErrorName(result, &mut name_ptr));
-                if res != CUDA_SUCCESS {
-                    return Err(Error::CudaError("Unknown CudaDriver Error".to_string()));
-                }
-                let mut descr_ptr: *const c_char = ptr::null();
-                let res = cuda!(cuGetErrorString(result, &mut descr_ptr));
-                if res != CUDA_SUCCESS {
-                    return Err(Error::CudaError("Unknown CudaDriver Error".to_string()));
-                }
-                let err_name = unsafe { CStr::from_ptr(name_ptr) };
-                let err_descr = unsafe { CStr::from_ptr(descr_ptr) };
-                let name = err_name.to_string_lossy();
-                let descr = err_descr.to_string_lossy();
-
-                let err = format!("{}: {}", name, descr);
-                Err(Error::CudaError(err))
-            }
+            _ => Err(Error::CudaError(result)),
         }
+    }
+}
+
+impl std::fmt::Display for CUresult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut name_ptr: *const c_char = ptr::null();
+        let res = cuda!(cuGetErrorName(*self, &mut name_ptr));
+        if res != CUDA_SUCCESS {
+            panic!("Unknown CudaDriver Error while getting error name");
+        }
+        let mut descr_ptr: *const c_char = ptr::null();
+        let res = cuda!(cuGetErrorString(*self, &mut descr_ptr));
+        if res != CUDA_SUCCESS {
+            panic!("Unknown CudaDriver Error while getting error string");
+        }
+        let err_name = unsafe { CStr::from_ptr(name_ptr) };
+        let err_descr = unsafe { CStr::from_ptr(descr_ptr) };
+        let name = err_name.to_string_lossy();
+        let descr = err_descr.to_string_lossy();
+
+        write!(f, "{}: {}", name, descr)
     }
 }
 
