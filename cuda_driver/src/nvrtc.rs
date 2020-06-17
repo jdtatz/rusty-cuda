@@ -18,7 +18,11 @@ use std::fmt::Display;
 #[repr(transparent)]
 #[derive(From, PartialEq, Eq)]
 struct nvrtcResult(u32);
-type nvrtcProgram = *mut c_void;
+#[repr(transparent)]
+#[derive(From, Clone, Copy, Debug)]
+struct nvrtcProgram(*mut c_void);
+unsafe impl Send for nvrtcProgram {}
+unsafe impl Sync for nvrtcProgram {}
 const NVRTC_SUCCESS: nvrtcResult = nvrtcResult(0);
 
 #[repr(transparent)]
@@ -205,7 +209,7 @@ pub fn compile(
     compile_opts: &[&CStr],
     prog_name: &CStr,
 ) -> Result<(CString, CString)> {
-    let mut prog = std::ptr::null_mut();
+    let mut prog = nvrtcProgram(std::ptr::null_mut());
     nvrtc!(@safe nvrtcCreateProgram(&mut prog as *mut _, src.as_ptr(), prog_name.as_ptr(), 0, std::ptr::null(), std::ptr::null()))?;
     nvrtc!(@safe nvrtcAddNameExpression(prog, fname_expr.as_ptr()))?;
     let copts = compile_opts.iter().map(|c| c.as_ptr()).collect::<Vec<_>>();
