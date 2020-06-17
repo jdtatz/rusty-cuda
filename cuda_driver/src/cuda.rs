@@ -24,6 +24,7 @@ type CUstream = *mut c_void;
 type CUevent = *mut c_void;
 type CUmodule = *mut c_void;
 type CUfunction = *mut c_void;
+type CUhostFn = unsafe extern "C" fn(*mut c_void);
 
 pub const CUDA_VERSION: u32 = 10000;
 const CUDA_SUCCESS: CUresult = CUresult(0);
@@ -360,6 +361,7 @@ lib_defn! {"dynamic-cuda", "cuda", CudaDriverDyLib, {
     cuStreamCreate: fn(pStream: *mut CUstream, flags: CUstream_flags) -> CUresult,
     cuStreamSynchronize: fn(stream: CUstream) -> CUresult,
     cuStreamDestroy_v2: fn(stream: CUstream) -> CUresult,
+    cuLaunchHostFunc: fn(stream: CUstream, callback: CUhostFn, userdata: *mut c_void) -> CUresult,
 
     cuEventCreate: fn(phEvent: *mut CUevent, flags: CUevent_flags) -> CUresult,
     cuEventRecord: fn(hEvent: CUevent, stream: CUstream) -> CUresult,
@@ -604,6 +606,10 @@ impl Drop for CudaDevicePtr {
     }
 }
 
+unsafe extern "C" fn add_stream_callback<F: 'static + Send + Sync + FnOnce()>(userdata: *mut c_void) {
+    Box::from_raw(userdata as *mut F)()
+}
+
 pub struct CudaStream {
     stream: CUstream,
 }
@@ -611,6 +617,11 @@ pub struct CudaStream {
 impl CudaStream {
     pub fn synchronize(&self) -> Result<()> {
         cuda!(@safe cuStreamSynchronize(self.stream))
+    }
+
+    pub fn add_callback<F: 'static + Send + Sync + FnOnce()>(&self, callback: F) -> Result<()> {
+        let boxed_callback = Box::into_raw(Box::new(callback));
+        cuda!(@safe cuLaunchHostFunc(self.stream, add_stream_callback::<F>, boxed_callback as *mut c_void))
     }
 }
 
